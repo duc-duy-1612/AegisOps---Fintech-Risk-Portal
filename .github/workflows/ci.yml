@@ -1,0 +1,81 @@
+name: AegisOps CI Quality & Security Gate
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Audit, Typecheck, Lint, Vitest, Build & Playwright E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Audit production dependencies
+        run: npm audit --omit=dev
+
+      - name: TypeScript typecheck
+        run: npm run typecheck
+
+      - name: ESLint verification
+        run: npm run lint
+
+      - name: Run Unit & API Integration tests (Vitest)
+        env:
+          GEMINI_API_KEY: ''
+          AEGIS_REQUIRE_STRICT_SECRETS: 'false'
+          AEGIS_REQUIRE_SHARED_PERSISTENCE: 'false'
+          AEGIS_REQUIRE_DISTRIBUTED_RATE_LIMIT: 'false'
+        run: npm test
+
+      - name: Build production bundle
+        env:
+          GEMINI_API_KEY: ''
+          AEGIS_REQUIRE_STRICT_SECRETS: 'false'
+          AEGIS_REQUIRE_SHARED_PERSISTENCE: 'false'
+          AEGIS_REQUIRE_DISTRIBUTED_RATE_LIMIT: 'false'
+        run: npm run build
+
+      - name: Install Playwright Chromium browser
+        run: npx playwright install --with-deps chromium
+
+      - name: Run End-to-End browser scenarios (Playwright)
+        env:
+          AEGIS_E2E_DISABLE_EXTERNAL_AI: 'true'
+          GEMINI_API_KEY: ''
+          AEGIS_SESSION_SECRET: 'ci-ephemeral-session-secret-0123456789abcdef012345'
+          AEGIS_PII_HMAC_KEY: 'ci-ephemeral-pii-hmac-secret-0123456789abcdef0123'
+          AEGIS_REQUIRE_STRICT_SECRETS: 'false'
+          AEGIS_REQUIRE_SHARED_PERSISTENCE: 'false'
+          AEGIS_REQUIRE_DISTRIBUTED_RATE_LIMIT: 'false'
+        run: npm run test:e2e
+
+      - name: Upload Playwright E2E diagnostics & screenshots
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-test-results
+          path: test-results/
+          if-no-files-found: ignore
+          retention-days: 7

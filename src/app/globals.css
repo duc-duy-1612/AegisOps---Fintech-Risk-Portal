@@ -1,0 +1,141 @@
+@import url('https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+body {
+  background-color: #0B1120;
+  color: #F8FAFC;
+  font-family: 'Be Vietnam Pro', system-ui, -apple-system, sans-serif;
+  font-variant-numeric: tabular-nums;
+  overflow-x: hidden;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Unified typography across all text, badges, numbers, and IDs */
+code, pre, .font-mono, .font-sans {
+  font-family: 'Be Vietnam Pro', system-ui, -apple-system, sans-serif;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Clean dark scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #0F172A;
+}
+::-webkit-scrollbar-thumb {
+  background: #334155;
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #475569;
+}
+
+/* Fix React Flow control bar on dark theme */
+.react-flow__controls {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5) !important;
+  border: 1px solid #334155 !important;
+  border-radius: 8px !important;
+  overflow: hidden !important;
+  background: #1E293B !important;
+}
+
+.react-flow__controls-button {
+  background: #1E293B !important;
+  border-bottom: 1px solid #334155 !important;
+  fill: #F8FAFC !important;
+  color: #F8FAFC !important;
+}
+
+.react-flow__controls-button:hover {
+  background: #334155 !important;
+}
+
+.react-flow__edge-textbg {
+  fill: #0F172A !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, ::before, ::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Wave 2 IMP-06: Dedicated @media print Stylesheet for Legal Compliance Dossier */
+@media print {
+  @page {
+    size: A4 portrait;
+    margin: 14mm 12mm;
+  }
+
+  html,
+  body {
+    background: #ffffff !important;
+    color: #0f172a !important;
+    color-scheme: light !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+    overflow: visible !important;
+  }
+
+  /* Hide navigation, sidebars, backdrop controls, buttons */
+  body > * {
+    visibility: hidden !important;
+  }
+
+  .no-print,
+  .no-print * {
+    display: none !important;
+    visibility: hidden !important;
+  }
+
+  .printable-dossier-overlay,
+  .printable-dossier-overlay * {
+    visibility: visible !important;
+  }
+
+  .printable-dossier-overlay {
+    position: static !important;
+    inset: auto !important;
+    display: block !important;
+    background: #ffffff !important;
+    padding: 0 !important;
+    backdrop-filter: none !important;
+  }
+
+  .printable-dossier-card {
+    position: static !important;
+    max-width: 100% !important;
+    max-height: none !important;
+    overflow: visible !important;
+    border: 1px solid #cbd5e1 !important;
+    border-radius: 6px !important;
+    box-shadow: none !important;
+    background: #ffffff !important;
+    color: #0f172a !important;
+  }
+
+  .printable-dossier-card * {
+    background-color: transparent !important;
+    color: #0f172a !important;
+    border-color: #cbd5e1 !important;
+    box-shadow: none !important;
+    text-shadow: none !important;
+  }
+
+  .printable-dossier-section {
+    break-inside: avoid !important;
+    page-break-inside: avoid !important;
+  }
+}
