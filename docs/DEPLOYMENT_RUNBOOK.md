@@ -33,28 +33,57 @@ Before setting `AEGIS_REQUIRE_*` flags to `true` on Vercel Production/Preview:
 
 ## 2. Database Schema Migration & Verification (Using `DIRECT_URL`)
 
-Always run schema DDL migrations against `DIRECT_URL` (non-pooled endpoint) before routing production traffic:
+Both SQL migrations below are **mandatory** for the current application runtime (`PostgresPersistenceAdapter` requires the Migration 002 clawback columns, partial unique indexes, and ledger status guard trigger). Never assume a successful Migration 001 means the current runtime schema is complete.
+
+- Execute DDL strictly against the direct, non-pooled `DIRECT_URL` endpoint before routing traffic.
+- `DIRECT_URL` must **never** be exposed to normal Vercel Serverless runtime functions; keep it strictly in operator or migration tooling.
+- Stop immediately if any migration command fails (`-v ON_ERROR_STOP=1`).
 
 ```bash
 # 1. Verify direct connectivity
 psql "$DIRECT_URL" -c "SELECT version(), current_database();"
 
-# 2. Apply Wave 4 shared persistence DDL idempotently
+# 2. Apply Migration 001 (Wave 4 shared persistence baseline)
 psql "$DIRECT_URL" -v ON_ERROR_STOP=1 -f sql/migrations/001_wave4_shared_persistence.sql
 
-# 3. Verify applied migration row & created tables
-psql "$DIRECT_URL" -c "SELECT version, applied_at FROM aegis_schema_migrations;"
+# 3. Apply Migration 002 (multi-victim/partial clawback columns, idempotency/reversal indexes & ledger status trigger)
+psql "$DIRECT_URL" -v ON_ERROR_STOP=1 -f sql/migrations/002_clawback_multi_victim_and_tx_status.sql
+
+# 4. Verify BOTH migration records in aegis_schema_migrations
+psql "$DIRECT_URL" -c "SELECT version, applied_at FROM aegis_schema_migrations ORDER BY version;"
+
+# 5. Verify tables, Migration 002 clawback columns, indexes/constraints, and ledger trigger
 psql "$DIRECT_URL" -c "\dt aegis_*"
+psql "$DIRECT_URL" -c "\d+ aegis_clawback_receipts"
+psql "$DIRECT_URL" -c "\d+ aegis_ledger_transactions"
 ```
 
-Expected tables:
-- `aegis_schema_migrations`
-- `aegis_workspace_sessions`
-- `aegis_hitl_feedback`
-- `aegis_ledger_transactions`
-- `aegis_ledger_entries`
-- `aegis_clawback_receipts`
-- `aegis_audit_logs`
+Expected verification checklist (all items must be present before go-live):
+- **Applied migration rows (`aegis_schema_migrations`):**
+  - `001_wave4_shared_persistence`
+  - `002_clawback_multi_victim_and_tx_status`
+- **Operational tables (`7` total):**
+  - `aegis_schema_migrations`
+  - `aegis_workspace_sessions`
+  - `aegis_hitl_feedback`
+  - `aegis_ledger_transactions`
+  - `aegis_ledger_entries`
+  - `aegis_clawback_receipts`
+  - `aegis_audit_logs`
+- **Five Migration 002 columns on `aegis_clawback_receipts`:**
+  - `idempotency_key`
+  - `victim_account_id`
+  - `victim_owner_name`
+  - `source_mule_account_id`
+  - `original_tx_ids` (`JSONB NOT NULL DEFAULT '[]'::jsonb`, guarded by array check constraint `chk_aegis_clawback_original_tx_ids_array`)
+- **Migration 002 indexes & constraint changes on `aegis_clawback_receipts`:**
+  - Legacy `UNIQUE (session_id, alert_id)` constraint removed
+  - `idx_aegis_clawback_session_alert` on `(session_id, alert_id)`
+  - `uq_aegis_clawback_session_idem` partial unique index on `(session_id, idempotency_key) WHERE idempotency_key IS NOT NULL`
+  - `uq_aegis_clawback_session_reversal_tx` partial unique index on `(session_id, reversal_tx_id) WHERE reversal_tx_id IS NOT NULL`
+- **Migration 002 ledger immutability & monotonic status guard on `aegis_ledger_transactions`:**
+  - Trigger function `aegis_guard_ledger_tx_status_transition()`
+  - Trigger `trg_aegis_ledger_tx_status_guard` (`BEFORE UPDATE ON aegis_ledger_transactions`, enforcing monotonic `SETTLED`/`COMPLETED` -> `REVERSED` transitions and immutable transaction fields)
 
 ---
 
@@ -68,8 +97,8 @@ Set the following Environment Variables inside Vercel Project Settings (`Server-
 | `AEGIS_PII_HMAC_KEY` | Fresh 64-hex secret | Fresh 64-hex secret | Keyed HMAC-SHA-256 PII pseudonymization (`kid:<12-hex>`; Law 91/2025/QH15 & Decree 356/2025/NĐ-CP) |
 | `AEGIS_DIAGNOSTICS_SECRET` | Fresh 64-hex secret | Fresh 64-hex secret | Dedicated secret (`>=32` chars, distinct from session/admin secrets) for header `x-aegis-diagnostics-token` on `GET /api/health?diagnostics=internal` |
 | `AEGIS_ADMIN_RESET_SECRET` | Fresh 64-hex secret | Fresh 64-hex secret | Dedicated secret (`>=32` chars, distinct from session/diagnostics/PII secrets) for admin Gemini circuit reset; fails closed if unset (zero fallback to `AEGIS_SESSION_SECRET`) |
-| `AEGIS_ENABLE_DEMO_PERSONA_SWITCH` | `false` | `false` | Disables demo role switching in strict production mode |
-| `AEGIS_PRODUCTION_STRICT_READINESS` | `true` | `true` | Enforces shared Postgres, Upstash Redis, strict secrets & project quota scope |
+| `AEGIS_ENABLE_DEMO_PERSONA_SWITCH` | `true` (Track A Protected Synthetic Demo ONLY) / `false` (Track B Genuine Production) | `false` (Track B ONLY after OIDC/SSO is implemented) | Simulated demo personas are **not** real authentication; setting `false` locks out `POST /api/session` until real OIDC/SSO exists |
+| `AEGIS_PRODUCTION_STRICT_READINESS` | `false` (Track A Protected Synthetic Demo) / `true` (Track B Genuine Production) | `true` (Track B ONLY after OIDC/SSO is implemented) | Enforces shared Postgres, Upstash Redis, strict secrets, project quota scope & blocks demo persona switching (`true` + demo switch `true` fails `/api/health` with HTTP `503`) |
 | `AEGIS_REQUIRE_STRICT_SECRETS` | `true` | `true` | Fail-closed HTTP 503 if missing/weak |
 | `DATABASE_URL` | Staging `-pooler` URI (`?sslmode=verify-full&channel_binding=require`) | Production Neon `-pooler` URI (`?sslmode=verify-full&channel_binding=require`) | Runtime pooled verified-TLS connection (`rejectUnauthorized: true`, `enableChannelBinding: true`) |
 | `DIRECT_URL` | Operator/CI migration vault only | Operator/CI migration vault only | Non-pooled verified-TLS URI for `psql` DDL migrations; omit from Vercel runtime functions |
@@ -139,11 +168,26 @@ AegisOps enforces a conservative inline base64 JSON media contract on both `POST
 ## 7. Incident Rollback & Disaster Recovery
 
 1. **Application Rollback:** Promote the previous known-good deployment inside Vercel (`Deployments -> Instant Rollback`).
-2. **Database Backup & PITR:** Take a Neon branch snapshot before schema updates. To roll back Wave 4 schema cleanly in a pre-launch environment only:
-   ```bash
-   psql "$DIRECT_URL" -v ON_ERROR_STOP=1 -f sql/migrations/001_rollback.sql
-   ```
-3. **Session Emergency Revocation:** Call `DELETE /api/session` or set `status = 'REVOKED'` in `aegis_workspace_sessions` to immediately invalidate compromised demo sessions across all Vercel containers.
+2. **Database Schema Rollback & PITR (Explicit Owner Authorization Required):**
+   - **Neither rollback script is a routine deployment step.** Never execute either rollback automatically after a failed deployment.
+   - Production database restoration or destructive schema rollback requires separate explicit owner authorization.
+   - Required rollback order for a full schema teardown:
+     1. Assess and obtain explicit approval for the intended rollback scope.
+     2. Take and verify a Neon branch snapshot / PITR restore point before running any rollback SQL.
+     3. Assess whether persisted multi-victim or partial clawback records (duplicate `(session_id, alert_id)` pairs) exist in `aegis_clawback_receipts`.
+     4. Execute **Migration 002 rollback first**, only when its preconditions permit it:
+        ```bash
+        psql "$DIRECT_URL" -v ON_ERROR_STOP=1 -f sql/migrations/002_rollback.sql
+        ```
+        - `sql/migrations/002_rollback.sql` includes a duplicate-pair safety guard and **aborts with `RAISE EXCEPTION`** if restoring the legacy `UNIQUE (session_id, alert_id)` constraint would require deleting multi-victim or partial clawback rows.
+        - When preconditions pass, it drops `trg_aegis_ledger_tx_status_guard`, `aegis_guard_ledger_tx_status_transition()`, and Migration 002 indexes, restores the legacy uniqueness constraint, and deletes `'002_clawback_multi_victim_and_tx_status'` from `aegis_schema_migrations`.
+        - It non-destructively preserves the five additive audit columns and existing rows, and **does not** automatically restore previous `aegis_ledger_transactions.status` states (e.g., `REVERSED` rows remain `REVERSED`).
+     5. Execute **Migration 001 rollback ONLY** when a complete schema teardown is explicitly authorized and the database contains no required data:
+        ```bash
+        psql "$DIRECT_URL" -v ON_ERROR_STOP=1 -f sql/migrations/001_rollback.sql
+        ```
+        - **WARNING — DESTRUCTIVE:** `sql/migrations/001_rollback.sql` drops operational tables (`aegis_audit_logs`, `aegis_clawback_receipts`, `aegis_ledger_entries`, `aegis_ledger_transactions`, `aegis_hitl_feedback`, `aegis_workspace_sessions`) and permanently deletes all persisted session, HITL, ledger, clawback, and audit data.
+3. **Session Emergency Revocation:** Call `DELETE /api/session` or set `status = 'REVOKED'` in `aegis_workspace_sessions` to immediately invalidate compromised sessions across all Vercel containers.
 
 ---
 
@@ -154,4 +198,19 @@ The CI workflow runs on `push` and `pull_request` targeting `main`/`master` (`ub
 - **Least-Privilege Token (`CI-01`):** Top-level `permissions: { contents: read }` restricts `GITHUB_TOKEN` to read-only repository checkout; all other scopes default to `none`.
 - **Production Dependency Audit (`CI-02`):** Runs read-only `npm audit --omit=dev` immediately after `npm ci` (failing on its real exit code; never invokes `npm audit fix` or suppresses findings).
 - **Explicit E2E Gemini Isolation (`CI-03`):** The Playwright E2E step explicitly sets `AEGIS_E2E_DISABLE_EXTERNAL_AI: 'true'` and `GEMINI_API_KEY: ''` in addition to `playwright.config.ts` (`reuseExistingServer: false`), ensuring zero external Gemini API calls and zero GitHub Secrets required for CI.
-- **Verification Status:** Workflow configuration is validated locally; remote GitHub Actions execution (`REMOTE_CI_NOT_VERIFIED`) and repository branch protection (`NOT_VERIFIED`) must be enabled and confirmed after an authorized Git push.
+- **Verified Public GitHub Actions Remote CI Evidence:**
+  - **Workflow:** `AegisOps CI Quality & Security Gate`
+  - **Run ID:** `45337243148`
+  - **Run URL:** `https://github.com/duc-duy-1612/AegisOps---Fintech-Risk-Portal/actions/runs/45337243148`
+  - **Commit:** `7fecff868ee24e572b2eae485049b72f86141aee`
+  - **Event / Branch:** `push` on `main`
+  - **Conclusion:** `completed — success`
+  - **Hosted Runner:** `ubuntu-latest`
+  - **Verified Stages:** `npm ci`, production dependency audit (`npm audit --omit=dev`), TypeScript typecheck, ESLint, Vitest unit & integration suite, Next.js production build, Playwright Chromium installation, and Playwright E2E suite.
+- **Separate Verification Statuses (CI Success Does NOT Prove Cloud Deployment Readiness):**
+  - **GitHub Actions remote CI:** `VERIFIED — SUCCESS` *(in-memory, non-strict CI configuration only)*
+  - **GitHub branch protection on `main`:** `NOT ENABLED / NOT VERIFIED` *(per Wave B0 audit)*
+  - **Vercel cloud deployment:** `NOT VERIFIED`
+  - **Neon staging/production connectivity:** `NOT VERIFIED`
+  - **Upstash staging/production connectivity:** `NOT VERIFIED`
+  - **Gemini live API entitlement and quota:** `NOT VERIFIED`
