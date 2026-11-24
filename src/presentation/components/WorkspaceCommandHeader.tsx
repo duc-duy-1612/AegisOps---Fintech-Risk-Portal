@@ -9,6 +9,7 @@ import {
   Lock,
   Play,
   Search,
+  ShieldAlert,
   Smartphone,
   Sparkles,
   Tag,
@@ -68,8 +69,8 @@ const VIEW_TITLES: Record<WorkspaceViewId, { titleVi: string; descVi: string }> 
     descVi: 'Đồ thị BFS tương tác, 5 công cụ định lượng & Trợ lý AI có kiểm định tham chiếu trích dẫn',
   },
   CASE_BUILDER: {
-    titleVi: 'Xưởng Nhập Hồ sơ & Dữ liệu Kiểm thử Thực tế (Form 4 Phần)',
-    descVi: 'Tự nhập thông số giao dịch, tài khoản, thiết bị, API & ảnh chụp màn hình để kiểm chứng động',
+    titleVi: 'Xưởng Nhập Hồ sơ & Kịch bản Mô phỏng (Form 4 Phần)',
+    descVi: 'Tự nhập thông số kịch bản mô phỏng (tài khoản, thiết bị, API & ảnh mẫu) — không nhập dữ liệu thật',
   },
   WALLET_SHIELD: {
     titleVi: 'Mô phỏng Ví MoMo & Quản trị Lá chắn Cộng đồng',
@@ -126,6 +127,18 @@ export const WorkspaceCommandHeader = ({
 
   return (
     <header className="border-b border-slate-800/90 bg-slate-950/95 backdrop-blur sticky top-0 z-20">
+      {/* Synthetic-Only Contest Environment Boundary Notice (B1.0.3) */}
+      <div
+        data-testid="synthetic-env-notice"
+        className="px-4 py-1.5 bg-amber-950/55 border-b border-amber-500/30 flex items-center gap-2 text-[11px] text-amber-200"
+      >
+        <ShieldAlert className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+        <span className="leading-snug">
+          <strong className="text-amber-300">Môi trường Mô phỏng (Synthetic Contest Demo):</strong>{' '}
+          Chỉ sử dụng dữ liệu giả lập — <strong>KHÔNG</strong> nhập thông tin cá nhân (CCCD, SĐT, STK), tài khoản ngân hàng, hoặc ảnh chụp giao dịch thật.
+        </span>
+      </div>
+
       {/* Row 1: Breadcrumb + Role Badge + Search Bar + Notification Bell + Quick Tools */}
       <div className="px-4 py-2.5 flex flex-wrap lg:flex-nowrap items-center justify-between gap-3">
         <div className="min-w-0">

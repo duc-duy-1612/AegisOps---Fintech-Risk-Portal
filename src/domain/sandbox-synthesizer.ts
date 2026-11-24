@@ -1,6 +1,7 @@
 import { runDeterministicForensicsSuite } from './forensics-analyzers';
 import type {
   Account,
+  AiExecutionMetadata,
   ApiSecurityEvent,
   AuthSessionLog,
   CaseClassification,
@@ -20,6 +21,7 @@ export interface SandboxExtractedEntities {
   scamArchetypeVi: string;
   extractedSignals: string[];
   ocrExtractedTextVi?: string;
+  aiMetadata?: AiExecutionMetadata;
 }
 
 export interface SynthesizedSandboxBundle {
@@ -637,7 +639,27 @@ export const synthesizeSandboxCase = (params: {
     });
   }
 
-  // 7. Synthesize Multimodal Evidence Artifact from Part 4 Inputs
+  // 7. Synthesize Multimodal Evidence Artifact from Part 4 Inputs (Truthful AI/Deterministic Provenance)
+  const extractionAiMetadata = params.extractedOverrides?.aiMetadata;
+  const resolveImageEvidenceTitle = (meta?: AiExecutionMetadata): string => {
+    switch (meta?.executionPath) {
+      case 'PRIMARY_MODEL':
+        return 'Ảnh bằng chứng tải lên — Gemini Vision OCR';
+      case 'FALLBACK_MODEL':
+        return 'Ảnh bằng chứng tải lên — Gemini Vision Dự phòng';
+      case 'DETERMINISTIC_FALLBACK':
+        return 'Ảnh bằng chứng tải lên — Xử lý Mô phỏng Định lượng';
+      case 'AI_UNAVAILABLE':
+        return 'Ảnh bằng chứng tải lên — Chưa trích xuất bằng AI';
+      default:
+        return 'Ảnh bằng chứng tải lên — Xử lý Mô phỏng';
+    }
+  };
+  const ocrRanOnLiveGemini =
+    !extractionAiMetadata ||
+    extractionAiMetadata.executionPath === 'PRIMARY_MODEL' ||
+    extractionAiMetadata.executionPath === 'FALLBACK_MODEL';
+
   const evidence: EvidenceArtifact = {
     id: `EVD-SND-${suffix}`,
     alertId,
@@ -647,15 +669,16 @@ export const synthesizeSandboxCase = (params: {
         ? 'MEDICAL_INVOICE'
         : 'CHAT_TRANSCRIPT',
     title: inputSpec.imageDataUrl
-      ? 'Ảnh chụp màn hình bằng chứng tải lên (Gemini Multimodal Vision OCR)'
+      ? resolveImageEvidenceTitle(extractionAiMetadata)
       : 'Hồ sơ Bằng chứng & Ngữ cảnh Giao dịch Đầu vào',
     textContent:
-      extracted.ocrExtractedTextVi && !inputSpec.rawTranscript.trim()
+      extracted.ocrExtractedTextVi && ocrRanOnLiveGemini && !inputSpec.rawTranscript.trim()
         ? `[Gemini Vision OCR Trích xuất Trực tiếp từ Ảnh]: "${extracted.ocrExtractedTextVi}" — Giao dịch ${inputSpec.amountVnd.toLocaleString('vi-VN')} ₫ tới STK ${inputSpec.recipientAccountNumber} (${inputSpec.recipientOwnerName}).`
         : inputSpec.rawTranscript.trim() ||
-          `Hồ sơ kiểm thử: ${inputSpec.senderName} chuyển ${inputSpec.amountVnd.toLocaleString('vi-VN')} ₫ (${inputSpec.splitTxCount} lệnh) tới STK ${inputSpec.recipientAccountNumber} (${inputSpec.recipientOwnerName}).`,
+          `Hồ sơ kiểm thử mô phỏng: ${inputSpec.senderName} chuyển ${inputSpec.amountVnd.toLocaleString('vi-VN')} ₫ (${inputSpec.splitTxCount} lệnh) tới STK ${inputSpec.recipientAccountNumber} (${inputSpec.recipientOwnerName}).`,
     imageDataUrl: inputSpec.imageDataUrl,
     extractedSignals: extracted.extractedSignals,
+    ...(extractionAiMetadata ? { aiMetadata: extractionAiMetadata } : {}),
   };
 
   // Determine dynamic ScenarioCode based on real inputs

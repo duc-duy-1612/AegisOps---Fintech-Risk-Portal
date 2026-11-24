@@ -33,10 +33,13 @@
    ```env
    GEMINI_API_KEY=your_gemini_api_key_here
    GEMINI_PRIMARY_MODEL=gemini-3.5-flash-lite
-   GEMINI_FALLBACK_MODEL=gemini-2.5-flash-lite
-   AI_RATE_LIMIT_PER_MIN=30
+   GEMINI_FALLBACK_MODEL=gemini-3.1-flash-lite
+   AI_RATE_LIMIT_PER_MIN=12
+   AI_SANDBOX_RATE_LIMIT_PER_MIN=8
+   AI_OCR_RATE_LIMIT_PER_MIN=6
+   AI_IP_BURST_LIMIT_PER_MIN=36
    ```
-   *(Lưu ý: Hệ thống sử dụng chuỗi dự phòng 3 tầng `gemini-3.5-flash-lite` → `gemini-2.5-flash-lite` → `Deterministic Forensics Engine`, đảm bảo chuyển sang chế độ dự phòng định lượng an toàn khi hết quota hoặc lỗi kết nối API. Xem cấu hình biến môi trường mở rộng cho staging/production — gồm PostgreSQL TLS, Upstash Redis, các khóa bí mật tách miền và quy trình triển khai chưa kiểm chứng trực tiếp trên hạ tầng đám mây — tại [docs/DEPLOYMENT_RUNBOOK.md](docs/DEPLOYMENT_RUNBOOK.md)).*
+   *(Lưu ý: Hệ thống sử dụng chuỗi dự phòng 3 tầng `gemini-3.5-flash-lite` → `gemini-3.1-flash-lite` (khuyến nghị cấu hình cho dự án Google mới; mã nguồn giữ `gemini-2.5-flash-lite` chỉ làm mặc định kế thừa khi không đặt biến, và quyền truy cập mô hình thực tế trên Google project sẽ được xác minh khi kiểm thử đám mây) → `Deterministic Forensics Engine`, đảm bảo chuyển sang chế độ dự phòng định lượng an toàn khi hết quota hoặc lỗi kết nối API. Mọi dữ liệu trong môi trường công khai chỉ là dữ liệu mô phỏng tổng hợp. Xem cấu hình biến môi trường mở rộng cho staging/production — gồm PostgreSQL TLS, Upstash Redis, các khóa bí mật tách miền và quy trình triển khai chưa kiểm chứng trực tiếp trên hạ tầng đám mây — tại [docs/DEPLOYMENT_RUNBOOK.md](docs/DEPLOYMENT_RUNBOOK.md)).*
 3. **Chạy môi trường phát triển (Development):**
    ```bash
    npm run dev
@@ -128,7 +131,7 @@
 
 ### 5.3. Công cụ AI đã sử dụng (AI Tools Disclosure)
 1. **Thành phần AI cốt lõi bên trong sản phẩm (Runtime Core AI):**
-   - **Google Gemini API (`gemini-3.5-flash-lite` mặc định & `gemini-2.5-flash-lite` dự phòng):** Hỗ trợ phân tích bằng chứng đa phương thức (đọc ảnh chụp màn hình đoạn chat lừa đảo / hóa đơn tiểu thương), bóc tách thực thể trong Live Sandbox, tóm tắt kết quả từ 5 công cụ Forensics và trả lời hỏi đáp của chuyên viên vận hành (quyết định rủi ro gốc luôn do công cụ định lượng nắm giữ).
+   - **Google Gemini API (`gemini-3.5-flash-lite` mặc định & `gemini-3.1-flash-lite` dự phòng khuyến nghị qua cấu hình):** Hỗ trợ phân tích bằng chứng mô phỏng đa phương thức (đọc ảnh chụp màn hình đoạn chat lừa đảo mẫu / hóa đơn tiểu thương mẫu), bóc tách thực thể trong Live Sandbox, tóm tắt kết quả từ 5 công cụ Forensics và trả lời hỏi đáp của chuyên viên vận hành (quyết định rủi ro gốc luôn do công cụ định lượng nắm giữ).
 2. **Công cụ AI hỗ trợ phát triển (Development Assistant):**
    - **Google Antigravity IDE Agent:** Hỗ trợ thiết kế kiến trúc Clean Architecture, viết mã nguồn TypeScript, kiểm thử tự động và biên soạn tài liệu kỹ thuật dưới sự chỉ đạo và kiểm duyệt của đội thi.
 

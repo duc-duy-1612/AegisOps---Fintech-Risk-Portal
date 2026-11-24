@@ -351,6 +351,12 @@ export interface PgQueryablePool {
   end?: () => Promise<void>;
 }
 
+export interface ExpiredSessionPurgeResult {
+  purgedCount: number;
+  batchLimit: number;
+  mode: 'POSTGRES' | 'MEMORY' | 'MISCONFIGURED_FAIL_CLOSED';
+}
+
 export interface WorkspacePersistenceAdapter {
   readonly mode: 'POSTGRES' | 'MEMORY' | 'MISCONFIGURED_FAIL_CLOSED';
   loadSession(sessionId: string): Promise<StoredSessionEnvelope | null>;
@@ -363,6 +369,10 @@ export interface WorkspacePersistenceAdapter {
   }): Promise<SessionDeltaSnapshot>;
   revokeSession(sessionId: string): Promise<void>;
   isSessionRevoked(sessionId: string): Promise<boolean>;
+  purgeExpiredSessions(options?: {
+    batchSize?: number;
+    nowIso?: string;
+  }): Promise<ExpiredSessionPurgeResult>;
   ping(): Promise<PersistenceHealthPing>;
   close?(): Promise<void>;
 }
@@ -482,10 +492,31 @@ export class InMemoryPersistenceAdapter implements WorkspacePersistenceAdapter {
     this.revokedIds.add(sessionId);
     const existing = this.store.get(sessionId);
     if (existing) {
+      const revokedAtIso = existing.revokedAt ?? new Date().toISOString();
+      // Scrub persisted Sandbox transcripts, images, and custom payloads on revocation
+      const scrubbedDelta: SessionDeltaSnapshot = {
+        sessionId,
+        stateRevision: existing.delta.stateRevision ?? 0,
+        alertStatuses: {},
+        frozenAccountIds: [],
+        activeShieldRules: [],
+        reportsByAlertId: {},
+        customAlerts: [],
+        customAccounts: [],
+        customTransactions: [],
+        customEvidences: [],
+        customDevices: [],
+        customAuthLogs: [],
+        customApiEvents: [],
+        customInputSpecsByAlertId: {},
+        auditLogs: [],
+        updatedAt: revokedAtIso,
+      };
       this.store.set(sessionId, {
         ...existing,
         status: 'REVOKED',
-        revokedAt: new Date().toISOString(),
+        delta: scrubbedDelta,
+        revokedAt: revokedAtIso,
       });
     }
   }
@@ -497,6 +528,27 @@ export class InMemoryPersistenceAdapter implements WorkspacePersistenceAdapter {
     if (existing.status === 'REVOKED' || existing.status === 'EXPIRED') return true;
     const expMs = Date.parse(existing.expiresAt);
     return Number.isFinite(expMs) && expMs <= Date.now();
+  }
+
+  async purgeExpiredSessions(options?: {
+    batchSize?: number;
+    nowIso?: string;
+  }): Promise<ExpiredSessionPurgeResult> {
+    const batchLimit = Math.min(Math.max(Math.floor(options?.batchSize ?? 100), 1), 500);
+    const cutoffMs = options?.nowIso ? Date.parse(options.nowIso) : Date.now();
+    const effectiveCutoff = Number.isFinite(cutoffMs) ? cutoffMs : Date.now();
+    let purgedCount = 0;
+
+    for (const [sid, env] of this.store.entries()) {
+      if (purgedCount >= batchLimit) break;
+      const expMs = Date.parse(env.expiresAt);
+      if (Number.isFinite(expMs) && expMs <= effectiveCutoff) {
+        this.store.delete(sid);
+        purgedCount += 1;
+      }
+    }
+
+    return { purgedCount, batchLimit, mode: 'MEMORY' };
   }
 
   async ping(): Promise<PersistenceHealthPing> {
@@ -525,6 +577,10 @@ export class FailClosedPersistenceAdapter implements WorkspacePersistenceAdapter
   }
 
   async isSessionRevoked(): Promise<boolean> {
+    throw new PersistenceUnavailableError();
+  }
+
+  async purgeExpiredSessions(): Promise<ExpiredSessionPurgeResult> {
     throw new PersistenceUnavailableError();
   }
 
@@ -903,9 +959,20 @@ export class PostgresPersistenceAdapter implements WorkspacePersistenceAdapter {
   }
 
   async revokeSession(sessionId: string): Promise<void> {
+    // Atomically mark REVOKED and scrub persisted Sandbox rawTranscript/imageDataUrl from delta_json
+    // while keeping the tombstone row so revoked cookies remain rejected and FK audit rows stay intact.
     await this.pool.query(
       `UPDATE aegis_workspace_sessions
-       SET status = 'REVOKED', revoked_at = NOW(), updated_at = NOW()
+       SET status = 'REVOKED',
+           delta_json = jsonb_build_object(
+             'sessionId', session_id,
+             'stateRevision', state_revision,
+             'redactedOnRevocation', true,
+             'revokedAt', COALESCE(revoked_at, NOW())
+           ),
+           delta_integrity_tag = '',
+           revoked_at = COALESCE(revoked_at, NOW()),
+           updated_at = NOW()
        WHERE session_id = $1`,
       [sessionId]
     );
@@ -921,6 +988,44 @@ export class PostgresPersistenceAdapter implements WorkspacePersistenceAdapter {
     if (row.status === 'REVOKED' || row.status === 'EXPIRED') return true;
     const expMs = Date.parse(String(row.expires_at));
     return Number.isFinite(expMs) && expMs <= Date.now();
+  }
+
+  /**
+   * Physically deletes expired session rows in a bounded, concurrency-safe batch
+   * using `FOR UPDATE SKIP LOCKED` so concurrent cleanup invocations are idempotent
+   * and never touch active (`expires_at > cutoff`) sessions.
+   */
+  async purgeExpiredSessions(options?: {
+    batchSize?: number;
+    nowIso?: string;
+  }): Promise<ExpiredSessionPurgeResult> {
+    const batchLimit = Math.min(Math.max(Math.floor(options?.batchSize ?? 100), 1), 500);
+    const cutoffIso =
+      options?.nowIso && Number.isFinite(Date.parse(options.nowIso))
+        ? new Date(Date.parse(options.nowIso)).toISOString()
+        : new Date().toISOString();
+
+    const res = await this.pool.query(
+      `WITH expired_batch AS (
+         SELECT session_id
+         FROM aegis_workspace_sessions
+         WHERE expires_at <= $1::timestamptz
+         ORDER BY expires_at ASC
+         LIMIT $2
+         FOR UPDATE SKIP LOCKED
+       )
+       DELETE FROM aegis_workspace_sessions
+       WHERE session_id IN (SELECT session_id FROM expired_batch)
+       RETURNING session_id`,
+      [cutoffIso, batchLimit]
+    );
+
+    const purgedCount = res.rowCount ?? res.rows.length;
+    return {
+      purgedCount,
+      batchLimit,
+      mode: 'POSTGRES',
+    };
   }
 
   async ping(): Promise<PersistenceHealthPing> {
@@ -995,4 +1100,124 @@ export const getWorkspacePersistenceAdapter = (): WorkspacePersistenceAdapter =>
     cachedDefaultMemoryAdapter = new InMemoryPersistenceAdapter();
   }
   return cachedDefaultMemoryAdapter;
+};
+
+export const FIXED_CLEANUP_BATCH_LIMIT = 100;
+export const FIXED_CLEANUP_MAX_BATCHES = 10;
+export const FIXED_CLEANUP_TIME_BUDGET_MS = 8_000;
+
+export interface BoundedCleanupDrainResult {
+  ok: true;
+  purgedCount: number;
+  batchLimit: number;
+  batchSize: number;
+  batchesExecuted: number;
+  maxBatches: number;
+  maxRowsPerInvocation: number;
+  durationMs: number;
+  budgetExhausted: boolean;
+  batchLimitReached: boolean;
+  hasMoreExpiredPossible: boolean;
+  mode: 'POSTGRES' | 'MEMORY' | 'MISCONFIGURED_FAIL_CLOSED';
+}
+
+export class PartialCleanupDrainError extends Error {
+  public readonly causeError: unknown;
+  public readonly purgedCountBeforeError: number;
+  public readonly batchesExecutedBeforeError: number;
+  public readonly durationMs: number;
+
+  constructor(params: {
+    causeError: unknown;
+    purgedCountBeforeError: number;
+    batchesExecutedBeforeError: number;
+    durationMs: number;
+  }) {
+    super('Cleanup batch drain failed mid-execution');
+    this.name = 'PartialCleanupDrainError';
+    this.causeError = params.causeError;
+    this.purgedCountBeforeError = params.purgedCountBeforeError;
+    this.batchesExecutedBeforeError = params.batchesExecutedBeforeError;
+    this.durationMs = params.durationMs;
+  }
+}
+
+/**
+ * Drains expired sessions across multiple bounded batches within fixed server-controlled
+ * batch-count and wall-clock execution budgets (leaving a wide safety margin below `maxDuration: 25s`).
+ */
+export const runBoundedExpiredSessionDrain = async (
+  adapter: Pick<WorkspacePersistenceAdapter, 'mode' | 'purgeExpiredSessions'>,
+  options?: {
+    batchSize?: number;
+    maxBatches?: number;
+    timeBudgetMs?: number;
+    nowMs?: () => number;
+    cutoffIso?: string;
+  }
+): Promise<BoundedCleanupDrainResult> => {
+  const batchSize = Math.min(Math.max(Math.floor(options?.batchSize ?? FIXED_CLEANUP_BATCH_LIMIT), 1), 500);
+  const maxBatches = Math.min(Math.max(Math.floor(options?.maxBatches ?? FIXED_CLEANUP_MAX_BATCHES), 1), 25);
+  const timeBudgetMs = Math.min(
+    Math.max(Math.floor(options?.timeBudgetMs ?? FIXED_CLEANUP_TIME_BUDGET_MS), 100),
+    20_000
+  );
+  const nowMs = options?.nowMs ?? (() => performance.now());
+  const startMs = nowMs();
+  const cutoffIso = options?.cutoffIso ?? new Date().toISOString();
+
+  let purgedCount = 0;
+  let batchesExecuted = 0;
+  let lastBatchCount = 0;
+  let budgetExhausted = false;
+  let mode: 'POSTGRES' | 'MEMORY' | 'MISCONFIGURED_FAIL_CLOSED' = adapter.mode;
+
+  while (batchesExecuted < maxBatches) {
+    if (batchesExecuted > 0 && nowMs() - startMs >= timeBudgetMs) {
+      budgetExhausted = true;
+      break;
+    }
+
+    try {
+      const batchRes = await adapter.purgeExpiredSessions({
+        batchSize,
+        nowIso: cutoffIso,
+      });
+      mode = batchRes.mode;
+      batchesExecuted += 1;
+      purgedCount += batchRes.purgedCount;
+      lastBatchCount = batchRes.purgedCount;
+
+      if (batchRes.purgedCount < batchSize) {
+        break;
+      }
+    } catch (err) {
+      throw new PartialCleanupDrainError({
+        causeError: err,
+        purgedCountBeforeError: purgedCount,
+        batchesExecutedBeforeError: batchesExecuted,
+        durationMs: Math.max(0, Math.round(nowMs() - startMs)),
+      });
+    }
+  }
+
+  const elapsedMs = Math.max(0, Math.round(nowMs() - startMs));
+  const batchLimitReached = batchesExecuted >= maxBatches && lastBatchCount >= batchSize;
+  const hasMoreExpiredPossible =
+    lastBatchCount >= batchSize && (batchLimitReached || budgetExhausted);
+
+  return {
+    ok: true,
+    purgedCount,
+    batchLimit: batchSize,
+    batchSize,
+    batchesExecuted,
+    maxBatches,
+    maxRowsPerInvocation: batchSize * maxBatches,
+    durationMs: elapsedMs,
+    budgetExhausted,
+    batchLimitReached,
+    hasMoreExpiredPossible,
+    mode,
+  };
 };

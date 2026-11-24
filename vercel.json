@@ -6,5 +6,11 @@
     "src/app/api/**/*.ts": {
       "maxDuration": 25
     }
-  }
+  },
+  "crons": [
+    {
+      "path": "/api/internal/cleanup",
+      "schedule": "0 3 * * *"
+    }
+  ]
 }

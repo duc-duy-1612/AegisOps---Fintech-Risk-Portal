@@ -8,6 +8,7 @@ import { z } from 'zod';
 import { verifyMerchantBillReceipt } from './merchant-verifier';
 import type {
   Account,
+  AiExecutionMetadata,
   MerchantVisionExtractedFields,
   MerchantVisionStatus,
   MerchantVisionVerificationBundle,
@@ -154,9 +155,11 @@ export const crossVerifyMerchantVisionAgainstLedger = (params: {
   ledgerTransactions: Transaction[];
   accounts: Account[];
   modelUsed: string;
+  aiMetadata?: AiExecutionMetadata;
   latencyMs: number;
   securityErrorVi?: string;
 }): MerchantVisionVerificationBundle => {
+  const aiMetaField = params.aiMetadata ? { aiMetadata: params.aiMetadata } : {};
   const confidenceDisclaimerVi =
     'Lưu ý: Độ tin cậy OCR chỉ là ước lượng từ mô hình thị giác, KHÔNG phải xác suất hiệu chuẩn hay bằng chứng thanh toán. Chỉ Sổ cái Hợp nhất (Unified Ledger) có thẩm quyền xác nhận tiền đã vào tài khoản.';
 
@@ -179,6 +182,7 @@ export const crossVerifyMerchantVisionAgainstLedger = (params: {
       recommendedNextActionVi: 'Vui lòng tải lại ảnh chụp màn hình Bill định dạng PNG, JPEG hoặc WebP dưới 4MB.',
       confidenceNoteVi: confidenceDisclaimerVi,
       modelUsed: params.modelUsed,
+      ...aiMetaField,
       latencyMs: params.latencyMs,
     };
   }
@@ -205,6 +209,7 @@ export const crossVerifyMerchantVisionAgainstLedger = (params: {
         'Chuyển sang nhập liệu thủ công Mã GD & Số tiền để đối soát Unified Ledger, hoặc bấm Thử lại OCR.',
       confidenceNoteVi: confidenceDisclaimerVi,
       modelUsed: params.modelUsed,
+      ...aiMetaField,
       latencyMs: params.latencyMs,
     };
   }
@@ -230,6 +235,7 @@ export const crossVerifyMerchantVisionAgainstLedger = (params: {
       recommendedNextActionVi: 'Kiểm tra trực tiếp số dư trên App MoMo Merchant hoặc nhập tay Mã GD để đối soát.',
       confidenceNoteVi: confidenceDisclaimerVi,
       modelUsed: params.modelUsed,
+      ...aiMetaField,
       latencyMs: params.latencyMs,
     };
   }
@@ -261,6 +267,7 @@ export const crossVerifyMerchantVisionAgainstLedger = (params: {
         'Đối chiếu thủ công Mã giao dịch duy nhất & số tiền chuyển khoản thực tế trên Biểu mẫu Sổ cái.',
       confidenceNoteVi: confidenceDisclaimerVi,
       modelUsed: params.modelUsed,
+      ...aiMetaField,
       latencyMs: params.latencyMs,
     };
   }
@@ -310,6 +317,7 @@ export const crossVerifyMerchantVisionAgainstLedger = (params: {
         'Chỉnh sửa / bổ sung thông tin còn thiếu ở ô nhập thủ công bên dưới rồi bấm Đối soát Sổ cái.',
       confidenceNoteVi: confidenceDisclaimerVi,
       modelUsed: params.modelUsed,
+      ...aiMetaField,
       latencyMs: params.latencyMs,
     };
   }
@@ -381,6 +389,7 @@ export const crossVerifyMerchantVisionAgainstLedger = (params: {
     recommendedNextActionVi: ledgerVerdict.merchantActionVi,
     confidenceNoteVi: confidenceDisclaimerVi,
     modelUsed: params.modelUsed,
+    ...aiMetaField,
     latencyMs: params.latencyMs,
   };
 };

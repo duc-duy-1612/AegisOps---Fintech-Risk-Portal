@@ -2,7 +2,10 @@ import { NextRequest, NextResponse } from 'next/server';
 import { executeAlertInvestigation } from '@/application/workspace-orchestrator';
 import { InvestigateRequestSchema, parseRequestJsonWithSchema } from '@/domain/api-schemas';
 import type { SessionDeltaSnapshot } from '@/domain/types';
-import { enforceDistributedRouteRateLimit } from '@/infrastructure/distributed-rate-limiter';
+import {
+  enforceDistributedRouteRateLimit,
+  resolvePublicAiRouteLimits,
+} from '@/infrastructure/distributed-rate-limiter';
 import { logStructuredEvent } from '@/infrastructure/observability';
 import {
   buildRateLimitErrorResponse,
@@ -21,18 +24,6 @@ import {
 
 export async function POST(req: NextRequest) {
   const start = performance.now();
-  const rate = await enforceDistributedRouteRateLimit(
-    req,
-    'investigate',
-    Number(process.env.AI_RATE_LIMIT_PER_MIN ?? 30)
-  );
-  const rateErr = buildRateLimitErrorResponse(
-    rate,
-    'Vượt quá giới hạn tần suất gọi AI trong 1 phút. Vui lòng thử lại sau giây lát.',
-    '/api/investigate'
-  );
-  if (rateErr) return rateErr;
-
   const csrf = verifySameOriginCsrf(req);
   if (!csrf.ok) {
     return NextResponse.json(
@@ -41,13 +32,41 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  const limits = resolvePublicAiRouteLimits('INVESTIGATE');
   const auth = authenticateSessionFromRequest(req);
   if (!auth.authenticated) {
+    const anonRate = await enforceDistributedRouteRateLimit(
+      req,
+      'investigate',
+      limits.ipBurstMaxPerMinute
+    );
+    const anonRateErr = buildRateLimitErrorResponse(
+      anonRate,
+      'Vượt quá giới hạn tần suất gọi AI trong 1 phút. Vui lòng thử lại sau giây lát.',
+      '/api/investigate'
+    );
+    if (anonRateErr) return anonRateErr;
     return NextResponse.json(
       { code: auth.status === 503 ? 'MISCONFIGURED_FAIL_CLOSED' : 'UNAUTHORIZED', errorVi: auth.errorVi },
       { status: auth.status }
     );
   }
+
+  const rate = await enforceDistributedRouteRateLimit(
+    req,
+    'investigate',
+    limits.ipBurstMaxPerMinute,
+    {
+      sessionId: auth.identity.sessionId,
+      sessionMaxPerMinute: limits.sessionMaxPerMinute,
+    }
+  );
+  const rateErr = buildRateLimitErrorResponse(
+    rate,
+    'Vượt quá giới hạn tần suất gọi AI trong 1 phút. Vui lòng thử lại sau giây lát.',
+    '/api/investigate'
+  );
+  if (rateErr) return rateErr;
 
   if (auth.identity.role === 'END_USER') {
     return NextResponse.json(
@@ -104,10 +123,17 @@ export async function POST(req: NextRequest) {
         { status: 400 }
       );
     }
+    logStructuredEvent({
+      level: 'ERROR',
+      route: '/api/investigate',
+      action: 'INVESTIGATE_ALERT',
+      status: '400',
+      errorCode: 'INVESTIGATION_ERROR',
+    });
     return NextResponse.json(
       {
         code: 'INVESTIGATION_ERROR',
-        errorVi: err instanceof Error ? err.message : 'Lỗi trong quá trình điều tra sự cố.',
+        errorVi: 'Không thể hoàn tất quá trình điều tra sự cố. Vui lòng thử lại sau.',
       },
       { status: 400 }
     );

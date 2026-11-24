@@ -6,7 +6,10 @@ import {
   parseRequestJsonWithSchema,
 } from '@/domain/api-schemas';
 import type { SessionDeltaSnapshot, StandardCaseInputSpec } from '@/domain/types';
-import { enforceDistributedRouteRateLimit } from '@/infrastructure/distributed-rate-limiter';
+import {
+  enforceDistributedRouteRateLimit,
+  resolvePublicAiRouteLimits,
+} from '@/infrastructure/distributed-rate-limiter';
 import { logStructuredEvent } from '@/infrastructure/observability';
 import {
   buildRateLimitErrorResponse,
@@ -28,14 +31,6 @@ import {
 
 export async function POST(req: NextRequest) {
   const start = performance.now();
-  const rate = await enforceDistributedRouteRateLimit(req, 'sandbox', 25);
-  const rateErr = buildRateLimitErrorResponse(
-    rate,
-    'Tần suất tạo kịch bản Sandbox quá nhanh. Vui lòng thử lại sau ít giây.',
-    '/api/sandbox'
-  );
-  if (rateErr) return rateErr;
-
   const csrf = verifySameOriginCsrf(req);
   if (!csrf.ok) {
     return NextResponse.json(
@@ -44,13 +39,41 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  const limits = resolvePublicAiRouteLimits('SANDBOX');
   const auth = authenticateSessionFromRequest(req);
   if (!auth.authenticated) {
+    const anonRate = await enforceDistributedRouteRateLimit(
+      req,
+      'sandbox',
+      limits.ipBurstMaxPerMinute
+    );
+    const anonRateErr = buildRateLimitErrorResponse(
+      anonRate,
+      'Tần suất tạo kịch bản Sandbox quá nhanh. Vui lòng thử lại sau ít giây.',
+      '/api/sandbox'
+    );
+    if (anonRateErr) return anonRateErr;
     return NextResponse.json(
       { code: auth.status === 503 ? 'MISCONFIGURED_FAIL_CLOSED' : 'UNAUTHORIZED', errorVi: auth.errorVi },
       { status: auth.status }
     );
   }
+
+  const rate = await enforceDistributedRouteRateLimit(
+    req,
+    'sandbox',
+    limits.ipBurstMaxPerMinute,
+    {
+      sessionId: auth.identity.sessionId,
+      sessionMaxPerMinute: limits.sessionMaxPerMinute,
+    }
+  );
+  const rateErr = buildRateLimitErrorResponse(
+    rate,
+    'Tần suất tạo kịch bản Sandbox quá nhanh. Vui lòng thử lại sau ít giây.',
+    '/api/sandbox'
+  );
+  if (rateErr) return rateErr;
 
   const parsed = await parseRequestJsonWithSchema(req, SandboxRequestSchema, {
     maxBytes: MEDIA_MAX_JSON_BODY_BYTES,
@@ -166,10 +189,17 @@ export async function POST(req: NextRequest) {
         { status: 400 }
       );
     }
+    logStructuredEvent({
+      level: 'ERROR',
+      route: '/api/sandbox',
+      action: 'CREATE_SANDBOX_ALERT',
+      status: '400',
+      errorCode: 'SANDBOX_ERROR',
+    });
     return NextResponse.json(
       {
         code: 'SANDBOX_ERROR',
-        errorVi: err instanceof Error ? err.message : 'Không thể khởi tạo hồ sơ kiểm thử.',
+        errorVi: 'Không thể khởi tạo hồ sơ kiểm thử mô phỏng. Vui lòng kiểm tra dữ liệu và thử lại.',
       },
       { status: 400 }
     );

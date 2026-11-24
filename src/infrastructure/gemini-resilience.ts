@@ -154,6 +154,93 @@ export const resolveGeminiModelConfig = (
   };
 };
 
+export interface ParsedPositiveIntEnvResult {
+  value: number;
+  valid: boolean;
+  malformed: boolean;
+  source: 'ENV' | 'DEFAULT';
+}
+
+export const parseStrictPositiveIntEnv = (
+  raw: string | undefined,
+  fallback: number,
+  min: number,
+  max: number
+): ParsedPositiveIntEnvResult => {
+  if (raw === undefined) {
+    return { value: fallback, valid: true, malformed: false, source: 'DEFAULT' };
+  }
+  const trimmed = raw.trim();
+  if (!trimmed || !/^\d+$/.test(trimmed)) {
+    return { value: fallback, valid: false, malformed: true, source: 'DEFAULT' };
+  }
+  const parsed = Number(trimmed);
+  if (!Number.isSafeInteger(parsed) || parsed < min || parsed > max) {
+    return { value: fallback, valid: false, malformed: true, source: 'DEFAULT' };
+  }
+  return { value: parsed, valid: true, malformed: false, source: 'ENV' };
+};
+
+export interface GlobalGeminiQuotaConfig {
+  globalRpmMax: number;
+  globalOcrRpmMax: number;
+  rpmValid: boolean;
+  ocrValid: boolean;
+  hasMalformedConfig: boolean;
+}
+
+export const resolveGlobalGeminiQuotaConfig = (
+  env: NodeJS.ProcessEnv = process.env
+): GlobalGeminiQuotaConfig => {
+  const rpm = parseStrictPositiveIntEnv(env.GEMINI_GLOBAL_RPM_LIMIT, 30, 1, 10_000);
+  const ocr = parseStrictPositiveIntEnv(env.GEMINI_GLOBAL_OCR_RPM_LIMIT, 12, 1, 5_000);
+  return {
+    globalRpmMax: rpm.value,
+    globalOcrRpmMax: ocr.value,
+    rpmValid: rpm.valid,
+    ocrValid: ocr.valid,
+    hasMalformedConfig: rpm.malformed || ocr.malformed,
+  };
+};
+
+export const isExplicitGeminiFallbackRequired = (
+  env: NodeJS.ProcessEnv = process.env
+): boolean => {
+  if (env.AEGIS_REQUIRE_EXPLICIT_GEMINI_FALLBACK === 'true') {
+    return true;
+  }
+  if (env.VERCEL_ENV === 'production' && hasConfiguredGeminiKey()) {
+    return true;
+  }
+  return false;
+};
+
+export interface GeminiFallbackReadinessStatus {
+  fallbackReady: boolean;
+  fallbackModel: string;
+  fallbackSource: 'GEMINI_FALLBACK_MODEL' | 'DEFAULT';
+  usingLegacyFallbackDefault: boolean;
+  explicitFallbackRequired: boolean;
+  warningCode?: 'LEGACY_DEFAULT_FALLBACK_IN_STRICT_MODE';
+}
+
+export const evaluateGeminiFallbackReadiness = (
+  env: NodeJS.ProcessEnv = process.env
+): GeminiFallbackReadinessStatus => {
+  const cfg = resolveGeminiModelConfig(env);
+  const explicitRequired = isExplicitGeminiFallbackRequired(env);
+  const usingLegacyDefault = cfg.fallbackSource === 'DEFAULT';
+  const fallbackReady = !explicitRequired || !usingLegacyDefault;
+  return {
+    fallbackReady,
+    fallbackModel: cfg.fallbackModel,
+    fallbackSource: cfg.fallbackSource,
+    usingLegacyFallbackDefault: usingLegacyDefault,
+    explicitFallbackRequired: explicitRequired,
+    ...(fallbackReady ? {} : { warningCode: 'LEGACY_DEFAULT_FALLBACK_IN_STRICT_MODE' as const }),
+  };
+};
+
 export const isGemini3FamilyModel = (model: string): boolean => {
   return /^gemini-3(?:\.|[-_]|$)/i.test((model || '').trim());
 };
@@ -1303,8 +1390,30 @@ export class GeminiResilienceInstance {
       this.trackRedisKey(params.credFp, params.quotaScopeId, ck);
     }
 
-    const globalRpmMax = Math.max(1, Number(process.env.GEMINI_GLOBAL_RPM_LIMIT ?? 30));
-    const globalOcrRpmMax = Math.max(1, Number(process.env.GEMINI_GLOBAL_OCR_RPM_LIMIT ?? 12));
+    const quotaConfig = resolveGlobalGeminiQuotaConfig();
+    if (quotaConfig.hasMalformedConfig) {
+      logStructuredEvent({
+        level: requireStrictRedis ? 'ERROR' : 'WARN',
+        route: 'gemini-resilience',
+        action: 'GLOBAL_QUOTA_CONFIG_MALFORMED',
+        status: requireStrictRedis ? 'FAIL_CLOSED' : 'SAFE_DEFAULT_APPLIED',
+        errorCode: 'MALFORMED_GLOBAL_QUOTA_ENV',
+        metadata: {
+          rpmValid: quotaConfig.rpmValid,
+          ocrValid: quotaConfig.ocrValid,
+        },
+      });
+      if (requireStrictRedis) {
+        return {
+          allowed: false,
+          reason: 'UNKNOWN_RATE_LIMIT',
+          failClosedRedisError: true,
+        };
+      }
+    }
+
+    const globalRpmMax = quotaConfig.globalRpmMax;
+    const globalOcrRpmMax = quotaConfig.globalOcrRpmMax;
     const currBucket = Math.floor(params.now / 60_000);
     const prevBucket = currBucket - 1;
     const elapsedRatio = (params.now % 60_000) / 60_000;

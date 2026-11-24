@@ -110,9 +110,14 @@ Set the following Environment Variables inside Vercel Project Settings (`Server-
 | `TRUST_PROXY_HEADERS` | `true` | `true` | Trusts Vercel `x-forwarded-for` / `x-real-ip` |
 | `GEMINI_API_KEY` | Server API Key | Server Paid-Tier Key | Isolated via local + Redis circuit breaker (Paid Services terms required to prevent prompt training) |
 | `GEMINI_QUOTA_SCOPE_ID` | Staging Google Project ID | Prod Google Project ID | Required in strict production mode (`proj_<24-hex>` project-level quota scope) |
-| `GEMINI_PRIMARY_MODEL` | `gemini-3.5-flash-lite` | `gemini-3.5-flash-lite` | Primary Gemini Developer API model (`gemini-2.5-flash` auto-routes on 2026-12-01) |
-| `GEMINI_FALLBACK_MODEL` | `gemini-2.5-flash-lite` | `gemini-2.5-flash-lite` | Secondary Gemini Developer API fallback model (active; distinct from Agent Platform/Vertex AI) |
-| `AI_RATE_LIMIT_PER_MIN` | `30` | `60` | Per-route AI rate limit |
+| `GEMINI_PRIMARY_MODEL` | `gemini-3.5-flash-lite` | `gemini-3.5-flash-lite` | Primary Gemini Developer API model (`gemini-2.5-flash` auto-routes on 2026-12-01; live project eligibility unverified until cloud smoke test) |
+| `GEMINI_FALLBACK_MODEL` | `gemini-3.1-flash-lite` | `gemini-3.1-flash-lite` | Recommended configuration-only secondary fallback for new Google projects (`gemini-2.5-flash-lite` is restricted to existing projects with prior usage and kept only as legacy unset code default) |
+| `AEGIS_REQUIRE_EXPLICIT_GEMINI_FALLBACK` | `false` | `true` | Fail `/api/health` readiness if `GEMINI_FALLBACK_MODEL` is unset when Gemini API is configured (auto-enforced on `VERCEL_ENV=production`) |
+| `CRON_SECRET` | `32+ chars` (dedicated) | `32+ chars` (dedicated) | Dedicated Bearer secret for scheduled expired-session purge (`GET/POST /api/internal/cleanup` via daily Vercel Cron `0 3 * * *`) |
+| `AI_RATE_LIMIT_PER_MIN` | `12` | `12` | Per-verified-session limit/min on `/api/investigate` and `/api/copilot` |
+| `AI_SANDBOX_RATE_LIMIT_PER_MIN` | `8` | `8` | Per-verified-session limit/min on `/api/sandbox` |
+| `AI_OCR_RATE_LIMIT_PER_MIN` | `6` | `6` | Per-verified-session limit/min on `/api/merchant/vision` |
+| `AI_IP_BURST_LIMIT_PER_MIN` | `36` | `36` | Shared-NAT per-IP burst cap/min across public AI routes (must be `>=` per-session caps) |
 | `GEMINI_GLOBAL_RPM_LIMIT` | `30` | `60` | Global project RPM ceiling across containers |
 | `GEMINI_GLOBAL_OCR_RPM_LIMIT` | `12` | `20` | Global Vision OCR RPM ceiling across containers |
 

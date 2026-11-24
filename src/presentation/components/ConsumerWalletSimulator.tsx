@@ -405,6 +405,13 @@ export const ConsumerWalletSimulator = ({
                   )}
                 </div>
 
+                <div
+                  data-testid="merchant-vision-synthetic-warning"
+                  className="px-2.5 py-1.5 rounded-lg bg-amber-950/45 border border-amber-500/35 text-[10px] text-amber-200 leading-relaxed"
+                >
+                  <strong className="text-amber-300">Chỉ tải ảnh bill mẫu mô phỏng:</strong> Không tải hóa đơn thật, CCCD, STK hay thông tin khách hàng thật. Ảnh chỉ xử lý tạm thời trên RAM, nhưng hệ thống không thể tự phân biệt ảnh thật và ảnh giả lập.
+                </div>
+
                 <div className="grid grid-cols-2 gap-1.5">
                   <label
                     htmlFor="merch-vision-upload"
@@ -554,6 +561,24 @@ export const ConsumerWalletSimulator = ({
                       <div className="font-bold text-amber-300 pt-0.5">
                         Hành động: {visionResult.recommendedNextActionVi}
                       </div>
+                      {visionResult.aiMetadata && (
+                        <div
+                          data-testid="merchant-vision-ai-provenance"
+                          className="text-[10px] text-slate-200/90 border-t border-white/10 pt-1 space-y-0.5"
+                        >
+                          <div className="font-semibold">
+                            Nguồn OCR:{' '}
+                            {visionResult.aiMetadata.executionPath === 'PRIMARY_MODEL'
+                              ? `Live Gemini Chính (${visionResult.aiMetadata.modelUsed})`
+                              : visionResult.aiMetadata.executionPath === 'FALLBACK_MODEL'
+                                ? `Live Gemini Dự phòng (${visionResult.aiMetadata.modelUsed})`
+                                : `AI Vision không khả dụng (${visionResult.aiMetadata.modelUsed})`}
+                          </div>
+                          {visionResult.aiMetadata.userNoticeVi && (
+                            <div className="opacity-90">{visionResult.aiMetadata.userNoticeVi}</div>
+                          )}
+                        </div>
+                      )}
                     </div>
                   </div>
                 )}

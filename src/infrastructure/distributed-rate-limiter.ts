@@ -22,7 +22,61 @@ export interface DistributedRateLimitResult {
   remaining: number;
   modeUsed: RateLimiterMode;
   degraded?: boolean;
+  limitScope?: 'IP' | 'SESSION';
+  retryAfterSeconds?: number;
 }
+
+export type PublicAiRouteKind = 'INVESTIGATE' | 'COPILOT' | 'SANDBOX' | 'VISION_OCR';
+
+export interface PublicAiRouteLimits {
+  sessionMaxPerMinute: number;
+  ipBurstMaxPerMinute: number;
+}
+
+const parsePositiveIntEnv = (
+  raw: string | undefined,
+  fallback: number,
+  min: number,
+  max: number
+): number => {
+  if (!raw) return fallback;
+  const parsed = Number.parseInt(raw.trim(), 10);
+  if (!Number.isFinite(parsed) || parsed < min) return fallback;
+  return Math.min(parsed, max);
+};
+
+/**
+ * Resolves layered per-session and shared-NAT per-IP burst limits for public AI endpoints.
+ * Keeping per-session caps lower than the shared-NAT per-IP burst prevents a single heavy
+ * session behind conference/judge Wi-Fi NAT from starving other valid judges on the same IP.
+ */
+export const resolvePublicAiRouteLimits = (kind: PublicAiRouteKind): PublicAiRouteLimits => {
+  let sessionMaxPerMinute: number;
+  switch (kind) {
+    case 'VISION_OCR':
+      sessionMaxPerMinute = parsePositiveIntEnv(process.env.AI_OCR_RATE_LIMIT_PER_MIN, 6, 1, 60);
+      break;
+    case 'SANDBOX':
+      sessionMaxPerMinute = parsePositiveIntEnv(process.env.AI_SANDBOX_RATE_LIMIT_PER_MIN, 8, 1, 60);
+      break;
+    case 'COPILOT':
+    case 'INVESTIGATE':
+    default:
+      sessionMaxPerMinute = parsePositiveIntEnv(process.env.AI_RATE_LIMIT_PER_MIN, 12, 1, 120);
+      break;
+  }
+
+  const configuredIpBurst = parsePositiveIntEnv(
+    process.env.AI_IP_BURST_LIMIT_PER_MIN,
+    36,
+    1,
+    300
+  );
+  return {
+    sessionMaxPerMinute,
+    ipBurstMaxPerMinute: Math.max(sessionMaxPerMinute, configuredIpBurst),
+  };
+};
 
 export interface UpstashCommandEntry {
   result?: unknown;
@@ -191,7 +245,8 @@ const handleRedisDegradation = (params: {
   routeTag: string;
   ip: string;
   sessionId?: string;
-  safeMax: number;
+  safeIpMax: number;
+  safeSessionMax: number;
   requireDistributed: boolean;
   criticalMutation?: boolean;
   errorCode: string;
@@ -206,25 +261,45 @@ const handleRedisDegradation = (params: {
   });
 
   if (mustFailClosed) {
-    return { allowed: false, remaining: 0, modeUsed: 'UPSTASH_REDIS', degraded: true };
+    return {
+      allowed: false,
+      remaining: 0,
+      modeUsed: 'UPSTASH_REDIS',
+      degraded: true,
+      retryAfterSeconds: 30,
+    };
   }
 
-  const memIp = checkRateLimit(`${params.routeTag}:ip:${params.ip}`, params.safeMax);
-  if (!memIp.allowed) {
-    return { allowed: false, remaining: 0, modeUsed: 'MEMORY_SINGLE_INSTANCE', degraded: true };
-  }
+  let sidRemaining: number | null = null;
   if (params.sessionId) {
-    const memSid = checkRateLimit(`${params.routeTag}:sid:${params.sessionId}`, params.safeMax);
+    const memSid = checkRateLimit(`${params.routeTag}:sid:${params.sessionId}`, params.safeSessionMax);
+    if (!memSid.allowed) {
+      return {
+        allowed: false,
+        remaining: 0,
+        modeUsed: 'MEMORY_SINGLE_INSTANCE',
+        degraded: true,
+        limitScope: 'SESSION',
+        retryAfterSeconds: 60,
+      };
+    }
+    sidRemaining = memSid.remaining;
+  }
+
+  const memIp = checkRateLimit(`${params.routeTag}:ip:${params.ip}`, params.safeIpMax);
+  if (!memIp.allowed) {
     return {
-      allowed: memSid.allowed,
-      remaining: Math.min(memIp.remaining, memSid.remaining),
+      allowed: false,
+      remaining: 0,
       modeUsed: 'MEMORY_SINGLE_INSTANCE',
       degraded: true,
+      limitScope: 'IP',
+      retryAfterSeconds: 60,
     };
   }
   return {
-    allowed: memIp.allowed,
-    remaining: memIp.remaining,
+    allowed: true,
+    remaining: sidRemaining === null ? memIp.remaining : Math.min(memIp.remaining, sidRemaining),
     modeUsed: 'MEMORY_SINGLE_INSTANCE',
     degraded: true,
   };
@@ -236,11 +311,18 @@ export const enforceDistributedRouteRateLimit = async (
   maxPerMinute: number,
   options?: {
     sessionId?: string;
+    sessionMaxPerMinute?: number;
     criticalMutation?: boolean;
   }
 ): Promise<DistributedRateLimitResult> => {
   const ip = resolveTrustedClientIp(req);
-  const safeMax = Number.isFinite(maxPerMinute) && maxPerMinute > 0 ? Math.floor(maxPerMinute) : 30;
+  const safeIpMax = Number.isFinite(maxPerMinute) && maxPerMinute > 0 ? Math.floor(maxPerMinute) : 30;
+  const safeSessionMax =
+    typeof options?.sessionMaxPerMinute === 'number' &&
+    Number.isFinite(options.sessionMaxPerMinute) &&
+    options.sessionMaxPerMinute > 0
+      ? Math.floor(options.sessionMaxPerMinute)
+      : safeIpMax;
   const requireDistributed = isStrictDistributedRateLimitRequired();
   const cfg = getUpstashConfig();
 
@@ -253,48 +335,52 @@ export const enforceDistributedRouteRateLimit = async (
         status: 'REJECTED',
         errorCode: 'MISCONFIGURED_FAIL_CLOSED',
       });
-      return { allowed: false, remaining: 0, modeUsed: 'MISCONFIGURED_FAIL_CLOSED' };
-    }
-
-    const ipRes = checkRateLimit(`${routeTag}:ip:${ip}`, safeMax);
-    if (!ipRes.allowed) {
-      return { allowed: false, remaining: 0, modeUsed: 'MEMORY_SINGLE_INSTANCE' };
-    }
-    if (options?.sessionId) {
-      const sidRes = checkRateLimit(`${routeTag}:sid:${options.sessionId}`, safeMax);
       return {
-        allowed: sidRes.allowed,
-        remaining: Math.min(ipRes.remaining, sidRes.remaining),
-        modeUsed: 'MEMORY_SINGLE_INSTANCE',
+        allowed: false,
+        remaining: 0,
+        modeUsed: 'MISCONFIGURED_FAIL_CLOSED',
+        retryAfterSeconds: 30,
       };
     }
-    return { allowed: true, remaining: ipRes.remaining, modeUsed: 'MEMORY_SINGLE_INSTANCE' };
+
+    // Check verified per-session cap FIRST so one heavy session behind shared NAT cannot starve other judges.
+    let sidRemaining: number | null = null;
+    if (options?.sessionId) {
+      const sidRes = checkRateLimit(`${routeTag}:sid:${options.sessionId}`, safeSessionMax);
+      if (!sidRes.allowed) {
+        return {
+          allowed: false,
+          remaining: 0,
+          modeUsed: 'MEMORY_SINGLE_INSTANCE',
+          limitScope: 'SESSION',
+          retryAfterSeconds: 60,
+        };
+      }
+      sidRemaining = sidRes.remaining;
+    }
+
+    const ipRes = checkRateLimit(`${routeTag}:ip:${ip}`, safeIpMax);
+    if (!ipRes.allowed) {
+      return {
+        allowed: false,
+        remaining: 0,
+        modeUsed: 'MEMORY_SINGLE_INSTANCE',
+        limitScope: 'IP',
+        retryAfterSeconds: 60,
+      };
+    }
+    return {
+      allowed: true,
+      remaining: sidRemaining === null ? ipRes.remaining : Math.min(ipRes.remaining, sidRemaining),
+      modeUsed: 'MEMORY_SINGLE_INSTANCE',
+    };
   }
 
   const windowBucket = Math.floor(Date.now() / 60_000);
-  const ipKey = `aegis:rl:${routeTag}:ip:${ip}:${windowBucket}`;
-  const ipOutcome = await executeAtomicRedisWindowIncrement({
-    cfg,
-    key: ipKey,
-    windowMs: 65_000,
-  });
+  const retryAfterSeconds = Math.max(1, 60 - Math.floor((Date.now() % 60_000) / 1000));
 
-  if (!ipOutcome.ok) {
-    return handleRedisDegradation({
-      routeTag,
-      ip,
-      sessionId: options?.sessionId,
-      safeMax,
-      requireDistributed,
-      criticalMutation: options?.criticalMutation,
-      errorCode: `REDIS_IP_${ipOutcome.errorCode}`,
-    });
-  }
-
-  if (ipOutcome.count > safeMax) {
-    return { allowed: false, remaining: 0, modeUsed: 'UPSTASH_REDIS' };
-  }
-
+  // Shared-NAT protection: check verified per-session bucket BEFORE incrementing the shared IP bucket.
+  let sidRemaining: number | null = null;
   if (options?.sessionId) {
     const sidKey = `aegis:rl:${routeTag}:sid:${options.sessionId}:${windowBucket}`;
     const sidOutcome = await executeAtomicRedisWindowIncrement({
@@ -307,18 +393,59 @@ export const enforceDistributedRouteRateLimit = async (
         routeTag,
         ip,
         sessionId: options.sessionId,
-        safeMax,
+        safeIpMax,
+        safeSessionMax,
         requireDistributed,
         criticalMutation: options.criticalMutation,
         errorCode: `REDIS_SID_${sidOutcome.errorCode}`,
       });
     }
-    if (sidOutcome.count > safeMax) {
-      return { allowed: false, remaining: 0, modeUsed: 'UPSTASH_REDIS' };
+    if (sidOutcome.count > safeSessionMax) {
+      return {
+        allowed: false,
+        remaining: 0,
+        modeUsed: 'UPSTASH_REDIS',
+        limitScope: 'SESSION',
+        retryAfterSeconds,
+      };
     }
-    const effectiveRemaining = Math.min(safeMax - ipOutcome.count, safeMax - sidOutcome.count);
-    return { allowed: true, remaining: Math.max(0, effectiveRemaining), modeUsed: 'UPSTASH_REDIS' };
+    sidRemaining = Math.max(0, safeSessionMax - sidOutcome.count);
   }
 
-  return { allowed: true, remaining: Math.max(0, safeMax - ipOutcome.count), modeUsed: 'UPSTASH_REDIS' };
+  const ipKey = `aegis:rl:${routeTag}:ip:${ip}:${windowBucket}`;
+  const ipOutcome = await executeAtomicRedisWindowIncrement({
+    cfg,
+    key: ipKey,
+    windowMs: 65_000,
+  });
+
+  if (!ipOutcome.ok) {
+    return handleRedisDegradation({
+      routeTag,
+      ip,
+      sessionId: options?.sessionId,
+      safeIpMax,
+      safeSessionMax,
+      requireDistributed,
+      criticalMutation: options?.criticalMutation,
+      errorCode: `REDIS_IP_${ipOutcome.errorCode}`,
+    });
+  }
+
+  if (ipOutcome.count > safeIpMax) {
+    return {
+      allowed: false,
+      remaining: 0,
+      modeUsed: 'UPSTASH_REDIS',
+      limitScope: 'IP',
+      retryAfterSeconds,
+    };
+  }
+
+  const ipRemaining = Math.max(0, safeIpMax - ipOutcome.count);
+  return {
+    allowed: true,
+    remaining: sidRemaining === null ? ipRemaining : Math.min(ipRemaining, sidRemaining),
+    modeUsed: 'UPSTASH_REDIS',
+  };
 };

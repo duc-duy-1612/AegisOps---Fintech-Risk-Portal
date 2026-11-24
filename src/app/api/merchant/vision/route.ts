@@ -7,7 +7,10 @@ import {
 } from '@/domain/api-schemas';
 import { crossVerifyMerchantVisionAgainstLedger } from '@/domain/merchant-vision';
 import type { SessionDeltaSnapshot } from '@/domain/types';
-import { enforceDistributedRouteRateLimit } from '@/infrastructure/distributed-rate-limiter';
+import {
+  enforceDistributedRouteRateLimit,
+  resolvePublicAiRouteLimits,
+} from '@/infrastructure/distributed-rate-limiter';
 import { extractMerchantBillWithGeminiVision } from '@/infrastructure/gemini-agent';
 import { logStructuredEvent } from '@/infrastructure/observability';
 import {
@@ -31,14 +34,6 @@ import {
 
 export async function POST(req: NextRequest) {
   const start = performance.now();
-  const rate = await enforceDistributedRouteRateLimit(req, 'merchant_vision', 25);
-  const rateErr = buildRateLimitErrorResponse(
-    rate,
-    'Tần suất quét ảnh Bill quá nhanh. Vui lòng thử lại sau ít giây.',
-    '/api/merchant/vision'
-  );
-  if (rateErr) return rateErr;
-
   const csrf = verifySameOriginCsrf(req);
   if (!csrf.ok) {
     return NextResponse.json(
@@ -47,13 +42,41 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  const limits = resolvePublicAiRouteLimits('VISION_OCR');
   const auth = authenticateSessionFromRequest(req);
   if (!auth.authenticated) {
+    const anonRate = await enforceDistributedRouteRateLimit(
+      req,
+      'merchant_vision',
+      limits.ipBurstMaxPerMinute
+    );
+    const anonRateErr = buildRateLimitErrorResponse(
+      anonRate,
+      'Tần suất quét ảnh Bill quá nhanh. Vui lòng thử lại sau ít giây.',
+      '/api/merchant/vision'
+    );
+    if (anonRateErr) return anonRateErr;
     return NextResponse.json(
       { code: auth.status === 503 ? 'MISCONFIGURED_FAIL_CLOSED' : 'UNAUTHORIZED', errorVi: auth.errorVi },
       { status: auth.status }
     );
   }
+
+  const rate = await enforceDistributedRouteRateLimit(
+    req,
+    'merchant_vision',
+    limits.ipBurstMaxPerMinute,
+    {
+      sessionId: auth.identity.sessionId,
+      sessionMaxPerMinute: limits.sessionMaxPerMinute,
+    }
+  );
+  const rateErr = buildRateLimitErrorResponse(
+    rate,
+    'Tần suất quét ảnh Bill quá nhanh. Vui lòng thử lại sau ít giây.',
+    '/api/merchant/vision'
+  );
+  if (rateErr) return rateErr;
 
   const parsed = await parseRequestJsonWithSchema(req, MerchantVisionVerifyRequestSchema, {
     maxBytes: MEDIA_MAX_JSON_BODY_BYTES,
@@ -111,6 +134,7 @@ export async function POST(req: NextRequest) {
       ledgerTransactions: state.transactions,
       accounts: state.accounts,
       modelUsed: ocrResult.modelUsed,
+      aiMetadata: ocrResult.aiMetadata,
       latencyMs: ocrResult.latencyMs,
     });
 
@@ -168,10 +192,17 @@ export async function POST(req: NextRequest) {
         { status: 400 }
       );
     }
+    logStructuredEvent({
+      level: 'ERROR',
+      route: '/api/merchant/vision',
+      action: 'MERCHANT_VISION_SCAN',
+      status: '400',
+      errorCode: 'MERCHANT_VISION_ERROR',
+    });
     return NextResponse.json(
       {
         code: 'MERCHANT_VISION_ERROR',
-        errorVi: err instanceof Error ? err.message : 'Lỗi xử lý Merchant Vision OCR.',
+        errorVi: 'Không thể xử lý ảnh hóa đơn vào lúc này. Vui lòng thử lại hoặc đối soát thủ công.',
       },
       { status: 400 }
     );

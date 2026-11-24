@@ -1,12 +1,13 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   CASE_BUILDER_PRESETS,
   deriveCaseInputSpecFromAlert,
 } from '@/domain/sandbox-synthesizer';
 import type { MerchantBillVerificationResult } from '@/domain/merchant-verifier';
 import type {
+  AiExecutionMetadata,
   ClawbackReceiptRecord,
   ConsumerTransferDecision,
   ForensicSuiteOutput,
@@ -23,9 +24,16 @@ import type {
   WorkspaceNotification,
 } from '@/domain/types';
 import type { MaterializedWorkspaceState } from '@/infrastructure/workspace-store';
+import {
+  DELTA_STORAGE_KEY,
+  SESSION_ID_STORAGE_KEY,
+  createWorkspaceAsyncCoordinator,
+  filterMatchingSessionDelta,
+  isConfirmedSessionInvalidationResponse,
+  type WorkspaceAsyncCoordinator,
+} from './workspace-lifecycle';
 
-const SESSION_ID_KEY = 'aegisops_session_id_v1';
-const DELTA_STORAGE_KEY = 'aegisops_session_delta_v1';
+const SESSION_ID_KEY = SESSION_ID_STORAGE_KEY;
 
 export interface ChatMessageItem {
   id: string;
@@ -33,6 +41,7 @@ export interface ChatMessageItem {
   text: string;
   modelUsed?: string;
   citedIds?: string[];
+  aiMetadata?: AiExecutionMetadata;
 }
 
 export const useAegisWorkspace = () => {
@@ -68,6 +77,27 @@ export const useAegisWorkspace = () => {
   const [toasts, setToasts] = useState<WorkspaceNotification[]>([]);
   const [isImportingBatch, setIsImportingBatch] = useState<boolean>(false);
   const [isLiveFeedEnabled, setIsLiveFeedEnabled] = useState<boolean>(false);
+  const coordinatorRef = useRef<WorkspaceAsyncCoordinator | null>(null);
+  if (!coordinatorRef.current) {
+    coordinatorRef.current = createWorkspaceAsyncCoordinator('judge-default-session');
+  }
+  const isSubmittingAiRef = useRef<boolean>(false);
+  const toastTimersRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
+
+  useEffect(() => {
+    const coordinator = coordinatorRef.current;
+    // Reactivate on mount/remount so React Strict Mode's setup -> cleanup(dispose) -> setup
+    // sequence keeps the same ref usable while pre-cleanup operations stay permanently invalidated.
+    coordinator?.activate();
+    const timers = toastTimersRef.current;
+    return () => {
+      coordinator?.dispose();
+      for (const timer of timers) {
+        clearTimeout(timer);
+      }
+      timers.clear();
+    };
+  }, []);
 
   const pushNotification = useCallback(
     (item: Omit<WorkspaceNotification, 'id' | 'timestamp' | 'read'>) => {
@@ -79,9 +109,11 @@ export const useAegisWorkspace = () => {
       };
       setNotifications((prev) => [notif, ...prev].slice(0, 25));
       setToasts((prev) => [notif, ...prev].slice(0, 3));
-      setTimeout(() => {
+      const timer = setTimeout(() => {
+        toastTimersRef.current.delete(timer);
         setToasts((prev) => prev.filter((t) => t.id !== notif.id));
       }, 4800);
+      toastTimersRef.current.add(timer);
     },
     []
   );
@@ -112,54 +144,101 @@ export const useAegisWorkspace = () => {
   }, []);
 
   const refreshWorkspace = useCallback(
-    async (sid: string, overrideDelta?: Partial<SessionDeltaSnapshot> | null) => {
-      const deltaToSend = overrideDelta !== undefined ? overrideDelta : readStoredDelta();
-      const res = await fetch('/api/workspace', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-workspace-session': sid },
-        body: JSON.stringify({ clientDelta: deltaToSend }),
-      });
-      if (!res.ok) return;
-      const data = (await res.json()) as {
-        state: MaterializedWorkspaceState;
-        forensicsByAlertId: Record<string, ForensicSuiteOutput>;
-      };
-      setWorkspaceState(data.state);
-      setForensicsMap(data.forensicsByAlertId);
-      persistDelta(data.state.delta);
+    async (
+      sid: string,
+      overrideDelta?: Partial<SessionDeltaSnapshot> | null,
+      externalSignal?: AbortSignal
+    ) => {
+      const coordinator = coordinatorRef.current!;
+      const rawDelta = overrideDelta !== undefined ? overrideDelta : readStoredDelta();
+      const deltaToSend = filterMatchingSessionDelta(rawDelta, sid);
+      if (rawDelta && !deltaToSend) {
+        try {
+          localStorage.removeItem(DELTA_STORAGE_KEY);
+        } catch {
+          // Ignore storage access errors
+        }
+      }
+
+      const op = coordinator.beginOperation(sid);
+      const onExternalAbort = () => op.controller.abort();
+      externalSignal?.addEventListener('abort', onExternalAbort, { once: true });
+      try {
+        const res = await fetch('/api/workspace', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-workspace-session': sid },
+          body: JSON.stringify({ clientDelta: deltaToSend }),
+          signal: op.controller.signal,
+        });
+        if (!res.ok) return;
+        const data = (await res.json()) as {
+          state: MaterializedWorkspaceState;
+          forensicsByAlertId: Record<string, ForensicSuiteOutput>;
+        };
+        if (!coordinator.isCurrent(op) || externalSignal?.aborted) return;
+        setWorkspaceState(data.state);
+        setForensicsMap(data.forensicsByAlertId);
+        persistDelta(data.state.delta);
+      } catch {
+        // Ignore aborted or transient fetch errors during refresh
+      } finally {
+        externalSignal?.removeEventListener('abort', onExternalAbort);
+        op.finish();
+      }
     },
     [persistDelta, readStoredDelta]
   );
 
-  const syncSignedSession = useCallback(async (sid: string, role: OperatorRole): Promise<string | null> => {
-    try {
-      const res = await fetch('/api/session', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-workspace-session': sid },
-        body: JSON.stringify({ sessionId: sid, role }),
-      });
-      if (res.ok) {
-        const payload = (await res.json().catch(() => ({}))) as { sessionId?: string };
-        return payload.sessionId || sid;
-      }
-      if (res.status === 401 || res.status === 403) {
-        const freshSid = `judge-${Math.random().toString(36).slice(2, 9)}-${Date.now().toString(36)}`;
-        const retryRes = await fetch('/api/session', {
+  const syncSignedSession = useCallback(
+    async (
+      sid: string,
+      role: OperatorRole,
+      signal?: AbortSignal
+    ): Promise<{ sessionId: string; rotated: boolean } | null> => {
+      try {
+        const res = await fetch('/api/session', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'x-workspace-session': freshSid },
-          body: JSON.stringify({ sessionId: freshSid, role }),
+          headers: { 'Content-Type': 'application/json', 'x-workspace-session': sid },
+          body: JSON.stringify({ sessionId: sid, role }),
+          signal,
         });
-        if (retryRes.ok) {
-          localStorage.setItem(SESSION_ID_KEY, freshSid);
-          setSessionId(freshSid);
-          return freshSid;
+        if (signal?.aborted) return null;
+        if (res.ok) {
+          const payload = (await res.json().catch(() => ({}))) as { sessionId?: string };
+          const activeSid = payload.sessionId || sid;
+          coordinatorRef.current?.setActiveSessionId(activeSid);
+          return { sessionId: activeSid, rotated: activeSid !== sid };
         }
+        const errPayload = (await res.json().catch(() => ({}))) as { code?: string };
+        // Rotate ONLY on confirmed session expiration/revocation/ownership errors — NEVER on transient 5xx/network errors
+        if (isConfirmedSessionInvalidationResponse(res.status, errPayload.code)) {
+          const freshSid = `judge-${Math.random().toString(36).slice(2, 9)}-${Date.now().toString(36)}`;
+          const retryRes = await fetch('/api/session', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'x-workspace-session': freshSid },
+            body: JSON.stringify({ sessionId: freshSid, role }),
+            signal,
+          });
+          if (signal?.aborted) return null;
+          if (retryRes.ok) {
+            try {
+              localStorage.removeItem(DELTA_STORAGE_KEY);
+              localStorage.setItem(SESSION_ID_KEY, freshSid);
+            } catch {
+              // Ignore storage quota errors
+            }
+            coordinatorRef.current?.invalidateAll(freshSid);
+            setSessionId(freshSid);
+            return { sessionId: freshSid, rotated: true };
+          }
+        }
+        return null;
+      } catch {
+        return null;
       }
-      return null;
-    } catch {
-      return null;
-    }
-  }, []);
+    },
+    []
+  );
 
   const changeOperatorRole = useCallback(
     async (nextRole: OperatorRole) => {
@@ -192,17 +271,36 @@ export const useAegisWorkspace = () => {
   );
 
   useEffect(() => {
-    let sid = localStorage.getItem(SESSION_ID_KEY);
-    if (!sid || sid === 'judge-default-session') {
-      sid = `judge-${Math.random().toString(36).slice(2, 9)}-${Date.now().toString(36)}`;
-      localStorage.setItem(SESSION_ID_KEY, sid);
-    }
-    setSessionId(sid);
-    void syncSignedSession(sid, 'L2_CHECKER').then((activeSid) => {
-      if (activeSid) {
-        return refreshWorkspace(activeSid);
+    const controller = new AbortController();
+    let cancelled = false;
+
+    let sid: string | null = null;
+    try {
+      sid = localStorage.getItem(SESSION_ID_KEY);
+      if (!sid || sid === 'judge-default-session') {
+        sid = `judge-${Math.random().toString(36).slice(2, 9)}-${Date.now().toString(36)}`;
+        localStorage.removeItem(DELTA_STORAGE_KEY);
+        localStorage.setItem(SESSION_ID_KEY, sid);
       }
+    } catch {
+      sid = `judge-${Math.random().toString(36).slice(2, 9)}-${Date.now().toString(36)}`;
+    }
+
+    coordinatorRef.current?.setActiveSessionId(sid);
+    setSessionId(sid);
+    void syncSignedSession(sid, 'L2_CHECKER', controller.signal).then((syncResult) => {
+      if (cancelled || !syncResult) return;
+      return refreshWorkspace(
+        syncResult.sessionId,
+        syncResult.rotated ? null : undefined,
+        controller.signal
+      );
     });
+
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
   }, [refreshWorkspace, syncSignedSession]);
 
   const selectedAlert =
@@ -253,26 +351,36 @@ export const useAegisWorkspace = () => {
 
   const runInvestigation = useCallback(
     async (targetAlertId?: string) => {
+      if (isSubmittingAiRef.current) return null;
       const alertId = targetAlertId || selectedAlert?.id || 'ALT-APP-003';
+      const coordinator = coordinatorRef.current!;
+      const op = coordinator.beginOperation(sessionId);
+      isSubmittingAiRef.current = true;
       setIsInvestigating(true);
       setErrorBanner(null);
       try {
         const res = await fetch('/api/investigate', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'x-workspace-session': sessionId },
-          body: JSON.stringify({ alertId, clientDelta: readStoredDelta() }),
+          body: JSON.stringify({
+            alertId,
+            clientDelta: filterMatchingSessionDelta(readStoredDelta(), sessionId),
+          }),
+          signal: op.controller.signal,
         });
         const data = (await res.json()) as {
           report?: InvestigationReport;
           delta?: SessionDeltaSnapshot;
           errorVi?: string;
         };
+        if (!coordinator.isCurrent(op)) return null;
         if (!res.ok || !data.delta) {
           setErrorBanner(data.errorVi || 'Không thể chạy điều tra AI.');
           return null;
         }
         persistDelta(data.delta);
-        await refreshWorkspace(sessionId, data.delta);
+        await refreshWorkspace(sessionId, data.delta, op.controller.signal);
+        if (!coordinator.isCurrent(op)) return null;
         if (data.report) {
           pushNotification({
             titleVi: `AI hoàn tất điều tra ${alertId}`,
@@ -284,9 +392,13 @@ export const useAegisWorkspace = () => {
         }
         return data.delta;
       } catch {
-        setErrorBanner('Mất kết nối tạm thời khi gọi AI Investigation.');
+        if (coordinator.isCurrent(op)) {
+          setErrorBanner('Mất kết nối tạm thời khi gọi AI Investigation.');
+        }
         return null;
       } finally {
+        op.finish();
+        isSubmittingAiRef.current = false;
         setIsInvestigating(false);
       }
     },
@@ -433,10 +545,17 @@ export const useAegisWorkspace = () => {
       amountVnd?: number;
       caseInputSpec?: Partial<StandardCaseInputSpec>;
     }) => {
+      if (isSubmittingAiRef.current) return false;
+      const coordinator = coordinatorRef.current!;
+      const op = coordinator.beginOperation(sessionId);
+      isSubmittingAiRef.current = true;
       setIsInvestigating(true);
       setErrorBanner(null);
       try {
-        const requestPayload = { ...payload, clientDelta: readStoredDelta() };
+        const requestPayload = {
+          ...payload,
+          clientDelta: filterMatchingSessionDelta(readStoredDelta(), sessionId),
+        };
         const serializedBody = JSON.stringify(requestPayload);
         const bodyBytes = new TextEncoder().encode(serializedBody).byteLength;
         if (bodyBytes > 4 * 1024 * 1024) {
@@ -449,6 +568,7 @@ export const useAegisWorkspace = () => {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'x-workspace-session': sessionId },
           body: serializedBody,
+          signal: op.controller.signal,
         });
         const data = (await res.json().catch(() => ({}))) as {
           createdAlertId?: string;
@@ -456,6 +576,7 @@ export const useAegisWorkspace = () => {
           delta?: SessionDeltaSnapshot;
           errorVi?: string;
         };
+        if (!coordinator.isCurrent(op)) return false;
         if (res.status === 413) {
           setErrorBanner(
             data.errorVi ||
@@ -468,7 +589,8 @@ export const useAegisWorkspace = () => {
           return false;
         }
         persistDelta(data.delta);
-        await refreshWorkspace(sessionId, data.delta);
+        await refreshWorkspace(sessionId, data.delta, op.controller.signal);
+        if (!coordinator.isCurrent(op)) return false;
         setSelectedAlertId(data.createdAlertId);
         if (data.extractedRecipientAccountNumber) {
           setWalletPrefillAccount(data.extractedRecipientAccountNumber);
@@ -478,7 +600,14 @@ export const useAegisWorkspace = () => {
         }
         setIsSandboxOpen(false);
         return true;
+      } catch {
+        if (coordinator.isCurrent(op)) {
+          setErrorBanner('Mất kết nối tạm thời khi gửi hồ sơ kiểm thử.');
+        }
+        return false;
       } finally {
+        op.finish();
+        isSubmittingAiRef.current = false;
         setIsInvestigating(false);
       }
     },
@@ -531,6 +660,8 @@ export const useAegisWorkspace = () => {
     async (question: string) => {
       if (!selectedAlert || !question.trim()) return;
       const alertId = selectedAlert.id;
+      const coordinator = coordinatorRef.current!;
+      const op = coordinator.beginOperation(sessionId);
       const userMsg: ChatMessageItem = {
         id: `usr-${Date.now()}`,
         role: 'analyst',
@@ -548,26 +679,36 @@ export const useAegisWorkspace = () => {
           body: JSON.stringify({
             alertId,
             question: question.trim(),
-            clientDelta: readStoredDelta(),
+            clientDelta: filterMatchingSessionDelta(readStoredDelta(), sessionId),
           }),
+          signal: op.controller.signal,
         });
-        const data = (await res.json()) as {
+        const data = (await res.json().catch(() => ({}))) as {
           answerVi?: string;
           modelUsed?: string;
           citedEvidenceIds?: string[];
+          aiMetadata?: AiExecutionMetadata;
+          errorVi?: string;
         };
+        if (!coordinator.isCurrent(op)) return;
         const botMsg: ChatMessageItem = {
           id: `bot-${Date.now()}`,
           role: 'copilot',
-          text: data.answerVi || 'Đã ghi nhận truy vấn.',
+          text: res.ok
+            ? data.answerVi || 'Đã ghi nhận truy vấn.'
+            : data.errorVi || 'Không thể xử lý truy vấn Copilot vào lúc này.',
           modelUsed: data.modelUsed,
           citedIds: data.citedEvidenceIds,
+          aiMetadata: data.aiMetadata,
         };
         setChatByAlertId((prev) => ({
           ...prev,
           [alertId]: [...(prev[alertId] ?? []), botMsg],
         }));
+      } catch {
+        // Ignore aborted requests on Reset Demo / session change
       } finally {
+        op.finish();
         setIsAskingCopilot(false);
       }
     },
@@ -575,16 +716,29 @@ export const useAegisWorkspace = () => {
   );
 
   const resetDemoWorkspace = useCallback(async () => {
-    localStorage.removeItem(DELTA_STORAGE_KEY);
-    const res = await fetch('/api/workspace', {
-      method: 'DELETE',
-      headers: { 'x-workspace-session': sessionId },
-    });
-    if (res.ok) {
+    const coordinator = coordinatorRef.current!;
+    // Invalidate epoch & abort ALL in-flight async operations immediately so stale responses cannot overwrite reset state
+    coordinator.invalidateAll(sessionId);
+    isSubmittingAiRef.current = false;
+    setIsInvestigating(false);
+    try {
+      localStorage.removeItem(DELTA_STORAGE_KEY);
+    } catch {
+      // Ignore storage access errors
+    }
+    const op = coordinator.beginOperation(sessionId);
+    try {
+      const res = await fetch('/api/workspace', {
+        method: 'DELETE',
+        headers: { 'x-workspace-session': sessionId },
+        signal: op.controller.signal,
+      });
+      if (!res.ok || !coordinator.isCurrent(op)) return;
       const data = (await res.json()) as {
         state: MaterializedWorkspaceState;
         forensicsByAlertId: Record<string, ForensicSuiteOutput>;
       };
+      if (!coordinator.isCurrent(op)) return;
       setWorkspaceState(data.state);
       setForensicsMap(data.forensicsByAlertId);
       setSelectedAlertId('ALT-APP-003');
@@ -593,6 +747,10 @@ export const useAegisWorkspace = () => {
       setHighlightedEvidenceId(null);
       setChatByAlertId({});
       persistDelta(data.state.delta);
+    } catch {
+      // Ignore aborted reset requests
+    } finally {
+      op.finish();
     }
   }, [persistDelta, sessionId]);
 

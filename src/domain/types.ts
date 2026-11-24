@@ -120,6 +120,7 @@ export interface EvidenceArtifact {
   textContent: string;
   imageDataUrl?: string;
   extractedSignals: string[];
+  aiMetadata?: AiExecutionMetadata;
 }
 
 export interface FraudAlert {
@@ -233,6 +234,29 @@ export const GeminiStructuredBriefSchema = z.object({
   recommendedActions: z.array(PlaybookActionSchema).min(1).max(12),
 });
 
+export type AiExecutionPath =
+  | 'PRIMARY_MODEL'
+  | 'FALLBACK_MODEL'
+  | 'DETERMINISTIC_FALLBACK'
+  | 'AI_UNAVAILABLE';
+
+export type AiFallbackReasonCode =
+  | 'PROVIDER_UNAVAILABLE'
+  | 'RATE_LIMITED'
+  | 'QUOTA_EXCEEDED'
+  | 'TIMEOUT'
+  | 'MODEL_UNAVAILABLE'
+  | 'UNCONFIGURED'
+  | 'UNKNOWN_PROVIDER_ERROR';
+
+export interface AiExecutionMetadata {
+  executionPath: AiExecutionPath;
+  primaryModel: string;
+  modelUsed: string;
+  fallbackReason?: AiFallbackReasonCode;
+  userNoticeVi?: string;
+}
+
 export interface InvestigationReport {
   alertId: string;
   classification: CaseClassification;
@@ -245,6 +269,7 @@ export interface InvestigationReport {
   recommendedActions: PlaybookActionItem[];
   userShieldWarningVi: string;
   modelUsed: string;
+  aiMetadata?: AiExecutionMetadata;
   latencyMs: number;
   generatedAt: string;
 }
@@ -417,6 +442,7 @@ export interface MerchantVisionVerificationBundle {
   recommendedNextActionVi: string;
   confidenceNoteVi: string;
   modelUsed: string;
+  aiMetadata?: AiExecutionMetadata;
   latencyMs: number;
 }
 

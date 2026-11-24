@@ -38,12 +38,12 @@
 
 ---
 
-### Phân cảnh 4 (2:00 – 2:30 | 30 giây): Biểu mẫu Chuẩn 4 Phần Tự nhập Dữ liệu thật & Biên bản Pháp lý Mô phỏng
+### Phân cảnh 4 (2:00 – 2:30 | 30 giây): Biểu mẫu Chuẩn 4 Phần Tự nhập Dữ liệu Mô phỏng & Biên bản Pháp lý Mô phỏng
 - **Thao tác trực tiếp trên màn hình:**
-  1. Mở **Phân hệ 3 — Nhập Hồ sơ & Dữ liệu Kiểm thử**: Chọn mẫu **Deepfake Camera Ảo**, sửa trực tiếp số tiền hoặc tải ảnh lên (hoặc nhập file `.CSV` hàng loạt từ Dashboard) để tính điểm động trong tab *What-If*.
+  1. Mở **Phân hệ 3 — Nhập Hồ sơ & Dữ liệu Kiểm thử**: Chọn mẫu **Deepfake Camera Ảo**, sửa trực tiếp số tiền hoặc tải ảnh mẫu mô phỏng lên (hoặc nhập file `.CSV` hàng loạt từ Dashboard) để tính điểm động trong tab *What-If*.
   2. Mở **Phân hệ 5 — Biên bản & Pháp lý**: Bấm nút **"Gửi bản tin SIMO (Mô phỏng)"** để tạo biên nhận cục bộ `SIMO-ACK-2026-*` với mã giả danh PII HMAC-SHA-256 tham chiếu **Luật 91/2025/QH15 & Nghị định 356/2025/NĐ-CP** (lưu ý: mô phỏng cục bộ, chưa kết nối SIMO thực tế).
 - **Lời bình (Voice-over):**
-  > *"Người dùng hay Ban giám khảo có thể tự nhập dữ liệu giao dịch qua Biểu mẫu Chuẩn 4 Phần hoặc nạp file CSV hàng loạt để kiểm chứng khả năng tính điểm động không hardcode, cuối cùng xuất Biên bản đối chiếu Quyết định 2345, Thông tư 50/2024 sửa đổi bởi Thông tư 77/2025, Luật 91/2025/QH15 và tạo bản tin SIMO mô phỏng cục bộ có giả danh PII bằng HMAC-SHA-256."*
+  > *"Người dùng hay Ban giám khảo có thể tự nhập kịch bản giao dịch mô phỏng qua Biểu mẫu Chuẩn 4 Phần hoặc nạp file CSV hàng loạt để kiểm chứng khả năng tính điểm động không hardcode, cuối cùng xuất Biên bản đối chiếu Quyết định 2345, Thông tư 50/2024 sửa đổi bởi Thông tư 77/2025, Luật 91/2025/QH15 và tạo bản tin SIMO mô phỏng cục bộ có giả danh PII bằng HMAC-SHA-256."*
 
 ---
 

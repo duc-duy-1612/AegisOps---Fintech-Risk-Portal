@@ -144,7 +144,8 @@ export const OverviewDashboardView = ({
             Chào mừng đến Trung tâm Vận hành Điều tra &amp; Bảo vệ Ví Thời gian thực
           </h2>
           <p className="text-xs text-slate-300 leading-relaxed">
-            Chọn một hồ sơ giao dịch bên dưới để điều tra đa nguồn trong <strong className="text-emerald-400">&lt;10 giây</strong>, tự nhập dữ liệu giao dịch thật của bạn qua <strong className="text-violet-300">Biểu mẫu 4 Phần</strong>, hoặc kiểm chứng trực tiếp cơ chế chặn giao dịch trên <strong className="text-cyan-300">Ví MoMo</strong>.
+            Chọn một hồ sơ mô phỏng bên dưới để điều tra đa nguồn trong <strong className="text-emerald-400">&lt;10 giây</strong>, tự tạo kịch bản kiểm thử tổng hợp qua <strong className="text-violet-300">Biểu mẫu 4 Phần</strong>, hoặc kiểm chứng trực tiếp cơ chế chặn giao dịch trên <strong className="text-cyan-300">Ví MoMo mô phỏng</strong>.{' '}
+            <span className="text-amber-300 font-semibold">Chỉ dùng dữ liệu giả lập — không nhập dữ liệu khách hàng hay giao dịch thật.</span>
           </p>
         </div>
 
@@ -155,7 +156,7 @@ export const OverviewDashboardView = ({
             className="cursor-pointer p-3 rounded-xl bg-violet-600/20 hover:bg-violet-600/30 border border-violet-500/40 text-left transition-all"
           >
             <FilePlus2 className="w-4 h-4 text-violet-300 mb-1.5" />
-            <div className="text-xs font-bold text-white">1. Nhập Hồ sơ Thực tế</div>
+            <div className="text-xs font-bold text-white">1. Tạo Kịch bản Mô phỏng</div>
             <div className="text-[11px] text-slate-300 mt-0.5">Form 4 Phần &amp; Quét ảnh OCR</div>
           </button>
 

@@ -207,12 +207,16 @@ export const AiCopilotInvestigationPanel = ({
     (sum, t) => sum + Math.round(t.amountVnd),
     0
   );
+  const aiExecutionPath = report?.aiMetadata?.executionPath;
   const isAiUnavailableReport = Boolean(
-    report && /unavailable|unconfigured/i.test(report.modelUsed)
+    aiExecutionPath === 'AI_UNAVAILABLE' ||
+      (report && /unavailable|unconfigured/i.test(report.modelUsed))
   );
   const isDeterministicFallbackReport = Boolean(
-    report && report.modelUsed.startsWith('deterministic-')
+    aiExecutionPath === 'DETERMINISTIC_FALLBACK' ||
+      (report && report.modelUsed.startsWith('deterministic-'))
   );
+  const isFallbackModelReport = aiExecutionPath === 'FALLBACK_MODEL';
   const isPartialReviewRequired = Boolean(
     report && !isDeterministicFallbackReport && !isAiUnavailableReport && report.citedEvidenceIds.length === 0
   );
@@ -292,32 +296,46 @@ export const AiCopilotInvestigationPanel = ({
           </span>
         </div>
 
-        {/* Explicit AI Source / Deterministic Fallback Provenance Badge (CR-2 & CR-2.1) */}
+        {/* Explicit AI Source / Fallback Model / Deterministic Fallback Provenance Badge (CR-2, CR-2.1 & B1.0.3) */}
         <div
           data-testid="ai-source-badge"
-          className={`flex flex-wrap items-center justify-between gap-1.5 px-2.5 py-1.5 rounded-lg border text-[11px] font-semibold ${!report
+          className={`flex flex-col gap-1 px-2.5 py-1.5 rounded-lg border text-[11px] font-semibold ${!report
             ? 'bg-slate-900 border-slate-700 text-slate-300'
             : isAiUnavailableReport
               ? 'bg-red-950/50 border-red-500/40 text-red-200'
               : isDeterministicFallbackReport || isPartialReviewRequired
                 ? 'bg-amber-950/50 border-amber-500/40 text-amber-200'
-                : 'bg-violet-950/50 border-violet-500/40 text-violet-200'
+                : isFallbackModelReport
+                  ? 'bg-indigo-950/55 border-indigo-400/50 text-indigo-100'
+                  : 'bg-violet-950/50 border-violet-500/40 text-violet-200'
             }`}
         >
-          <span>
-            {!report
-              ? 'Nguồn: Tóm tắt Định lượng (Chưa gọi Live Gemini)'
-              : isAiUnavailableReport
-                ? `Nguồn: AI không khả dụng (${report.modelUsed} • Cần rà soát thủ công)`
-                : isDeterministicFallbackReport
-                  ? `Nguồn: Chế độ Dự phòng Định lượng (${report.modelUsed} • Gemini tạm không khả dụng)`
-                  : isPartialReviewRequired
-                    ? `Nguồn: Phân tích Live Gemini một phần (${report.modelUsed} • Thiếu mã trích dẫn, cần chuyên viên rà soát)`
-                    : `Nguồn: Phân tích Live Gemini (${report.modelUsed} • Hỗ trợ điều tra, cần chuyên viên rà soát)`}
-          </span>
-          <span className="text-[10px] opacity-85">
-            Quyết định gốc: Định lượng ({forensics.deterministicRiskScore}/100)
-          </span>
+          <div className="flex flex-wrap items-center justify-between gap-1.5">
+            <span>
+              {!report
+                ? 'Nguồn: Tóm tắt Định lượng (Chưa gọi Live Gemini)'
+                : isAiUnavailableReport
+                  ? `Nguồn: AI không khả dụng (${report.modelUsed} • Cần rà soát thủ công)`
+                  : isDeterministicFallbackReport
+                    ? `Nguồn: Chế độ Dự phòng Định lượng (${report.modelUsed} • Gemini tạm không khả dụng)`
+                    : isFallbackModelReport
+                      ? `Nguồn: Live Gemini Dự phòng (${report.modelUsed} • Chuyển từ mô hình chính, cần chuyên viên rà soát)`
+                      : isPartialReviewRequired
+                        ? `Nguồn: Phân tích Live Gemini một phần (${report.modelUsed} • Thiếu mã trích dẫn, cần chuyên viên rà soát)`
+                        : `Nguồn: Phân tích Live Gemini Chính (${report.modelUsed} • Hỗ trợ điều tra, cần chuyên viên rà soát)`}
+            </span>
+            <span className="text-[10px] opacity-85">
+              Quyết định gốc: Định lượng ({forensics.deterministicRiskScore}/100)
+            </span>
+          </div>
+          {report?.aiMetadata?.userNoticeVi && (
+            <div
+              data-testid="ai-fallback-notice"
+              className="text-[10px] font-normal opacity-95 border-t border-white/10 pt-1 leading-snug"
+            >
+              {report.aiMetadata.userNoticeVi}
+            </div>
+          )}
         </div>
 
         <p className="text-xs text-slate-100 leading-relaxed">
@@ -937,12 +955,29 @@ export const AiCopilotInvestigationPanel = ({
                 chatMessages.map((m) => (
                   <div
                     key={m.id}
-                    className={`p-2.5 rounded-lg text-xs leading-relaxed ${m.role === 'analyst'
+                    className={`p-2.5 rounded-lg text-xs leading-relaxed space-y-1 ${m.role === 'analyst'
                       ? 'bg-violet-600/20 text-violet-100 border border-violet-500/30'
                       : 'bg-slate-900 text-slate-100 border border-slate-800'
                       }`}
                   >
                     <p>{m.text}</p>
+                    {m.role === 'copilot' && m.aiMetadata && (
+                      <div
+                        data-testid="copilot-chat-provenance"
+                        className="text-[10px] text-slate-400 border-t border-slate-800 pt-1 flex flex-wrap items-center justify-between gap-1"
+                      >
+                        <span>
+                          {m.aiMetadata.executionPath === 'PRIMARY_MODEL'
+                            ? `Nguồn: Live Gemini Chính (${m.aiMetadata.modelUsed})`
+                            : m.aiMetadata.executionPath === 'FALLBACK_MODEL'
+                              ? `Nguồn: Live Gemini Dự phòng (${m.aiMetadata.modelUsed})`
+                              : `Nguồn: Chế độ Dự phòng Định lượng (${m.aiMetadata.modelUsed})`}
+                        </span>
+                        {m.aiMetadata.userNoticeVi && (
+                          <span className="text-amber-300/90">{m.aiMetadata.userNoticeVi}</span>
+                        )}
+                      </div>
+                    )}
                   </div>
                 ))
               )}

@@ -19,6 +19,7 @@ export const buildRateLimitErrorResponse = (
     (rate.degraded && rate.modeUsed === 'UPSTASH_REDIS');
 
   if (isInfraUnavailable) {
+    const retryAfter = Math.max(1, Math.floor(rate.retryAfterSeconds ?? 30));
     logStructuredEvent({
       level: 'ERROR',
       route: routeTag,
@@ -31,14 +32,21 @@ export const buildRateLimitErrorResponse = (
         code: 'DISTRIBUTED_RATE_LIMIT_UNAVAILABLE',
         errorVi:
           'Hệ thống giới hạn tần suất phân tán (Redis) chưa sẵn sàng ở chế độ Fail-Closed.',
+        retryAfterSeconds: retryAfter,
       },
-      { status: 503 }
+      { status: 503, headers: { 'Retry-After': String(retryAfter) } }
     );
   }
 
+  const retryAfterSeconds = Math.max(1, Math.floor(rate.retryAfterSeconds ?? 60));
   return NextResponse.json(
-    { code: 'RATE_LIMITED', errorVi: rateLimitMessageVi },
-    { status: 429 }
+    {
+      code: 'RATE_LIMITED',
+      errorVi: rateLimitMessageVi,
+      retryAfterSeconds,
+      ...(rate.limitScope ? { limitScope: rate.limitScope } : {}),
+    },
+    { status: 429, headers: { 'Retry-After': String(retryAfterSeconds) } }
   );
 };
 

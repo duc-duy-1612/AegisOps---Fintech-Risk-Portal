@@ -47,7 +47,7 @@
 ## SLIDE 5: KIẾN TRÚC LAI ĐỊNH LƯỢNG GỐC + TRỢ LÝ AI (HYBRID DETERMINISTIC + AI-ASSISTED)
 - **Tầng 1 — Deterministic Forensics Engine (Pure TypeScript — Quyết định gốc):**
   - Tính toán nhất quán số tiền, truy vết đồ thị BFS đa nạn nhân, kiểm tra cờ `survived_credential_reset`, đếm xung đột mili-giây (`12 req/100ms`) và xác thực chữ ký HMAC.
-- **Tầng 2 — Gemini Multimodal Investigation Assistant (`gemini-3.5-flash-lite` / fallback `gemini-2.5-flash-lite`):**
+- **Tầng 2 — Gemini Multimodal Investigation Assistant (`gemini-3.5-flash-lite` / cấu hình dự phòng `gemini-3.1-flash-lite`):**
   - Hỗ trợ đọc ảnh chụp màn hình đoạn chat lừa đảo / hóa đơn tiểu thương (Vision OCR), diễn giải nguyên nhân gốc bằng tiếng Việt và trả lời Q&A cho chuyên viên (kèm phòng vệ prompt-injection & không thể ghi đè quyết định rủi ro gốc).
 - **Tầng 3 — Deterministic Citation Reference Validator (`validateAndRepairCitations`):**
   - Kiểm định tính tồn tại của mã bằng chứng trích dẫn (`TXN-*`, `LOG-*`, `DEV-*`, `EVT-*`, `EVD-*`) thuộc đúng vụ án (loại bỏ mã không tồn tại; chuyên viên vẫn rà soát ngữ nghĩa nội dung gốc).
@@ -80,7 +80,7 @@
 - **Clean Architecture 4 Lớp (`domain` → `application` → `infrastructure` → `presentation`):** Kiểm thử tự động toàn diện (Unit/Integration Vitest + Playwright Chromium E2E) bao phủ Sổ cái Kép & Clawback GD đã hạch toán, Merchant Vision & Soundbox mô phỏng, Quét Link Phishing/.APK, EMVCo TLV VietQR Parser cục bộ, Batch Triage 1-Chạm, Adaptive HITL & Maker–Checker L1/L2.
 - **Enterprise SaaS App Shell 5 Phân hệ:** Menu dọc thu gọn, Tag Box lọc nhanh, Dashboard Tổng quan (KPI thực đo, không cộng ảo), Biểu mẫu Hồ sơ 4 Phần tính toán động & Chế độ giả lập vai trò Demo L1/L2/End-User.
 - **Session Isolation & Persistence Architecture:** Cô lập phiên ký HMAC `HttpOnly` (`SessionDeltaSnapshot`) và sẵn sàng bộ chuyển đổi PostgreSQL/Upstash Redis cho giai đoạn triển khai cloud.
-- **Chuỗi Dự phòng AI 3 Tầng:** `gemini-3.5-flash-lite` → `gemini-2.5-flash-lite` → `Deterministic Forensics Engine` (hiển thị minh bạch nguồn thực thi trên `ai-source-badge`).
+- **Chuỗi Dự phòng AI 3 Tầng:** `gemini-3.5-flash-lite` → `gemini-3.1-flash-lite` (cấu hình dự phòng cho dự án Google mới) → `Deterministic Forensics Engine` (hiển thị minh bạch nguồn thực thi & thông báo fallback đã khử nhạy cảm trên `ai-source-badge`).
 - **Biên bản Đối chiếu Pháp lý Minh bạch:** Xuất hồ sơ PDF/Markdown ánh xạ yêu cầu **QĐ 2345**, **TT 50/2024 (sửa đổi bởi TT 77/2025 — PAD `CERTIFICATION_NOT_VERIFIED`)**, **Luật 91/2025/QH15 & NĐ 356/2025/NĐ-CP (`LEGAL_REVIEW_REQUIRED`)** và bản tin JSON **SIMO mô phỏng** (giả danh PII bằng HMAC-SHA-256; không phải kết nối thực tế).
 
 ---

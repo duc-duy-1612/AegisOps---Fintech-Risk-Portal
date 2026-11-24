@@ -70,7 +70,10 @@ export const EvidenceTelemetryTabs = ({
     [whatIfSpec]
   );
 
-  const alertEvidences = evidences.filter((e) => e.alertId === alertId);
+  const alertEvidences = useMemo(
+    () => evidences.filter((e) => e.alertId === alertId),
+    [evidences, alertId]
+  );
   const urlFindings: UrlThreatFinding[] = useMemo(
     () => inspectMaliciousUrlsAndApks(alertEvidences.map((e) => `${e.title} ${e.textContent}`).join(' ')),
     [alertEvidences]
@@ -241,6 +244,28 @@ export const EvidenceTelemetryTabs = ({
                     {ev.id}
                   </span>
                   <h3 className="text-xs font-bold text-white">{ev.title}</h3>
+                  {ev.aiMetadata && (
+                    <span
+                      data-testid="evidence-ai-provenance"
+                      className={`text-[10px] font-semibold px-2 py-0.5 rounded-md border ${
+                        ev.aiMetadata.executionPath === 'PRIMARY_MODEL'
+                          ? 'bg-violet-500/20 text-violet-200 border-violet-500/40'
+                          : ev.aiMetadata.executionPath === 'FALLBACK_MODEL'
+                            ? 'bg-indigo-500/20 text-indigo-200 border-indigo-500/40'
+                            : ev.aiMetadata.executionPath === 'AI_UNAVAILABLE'
+                              ? 'bg-red-500/20 text-red-200 border-red-500/40'
+                              : 'bg-amber-500/20 text-amber-200 border-amber-500/40'
+                      }`}
+                    >
+                      {ev.aiMetadata.executionPath === 'PRIMARY_MODEL'
+                        ? `Live Gemini (${ev.aiMetadata.modelUsed})`
+                        : ev.aiMetadata.executionPath === 'FALLBACK_MODEL'
+                          ? `Gemini Dự phòng (${ev.aiMetadata.modelUsed})`
+                          : ev.aiMetadata.executionPath === 'AI_UNAVAILABLE'
+                            ? 'AI không khả dụng'
+                            : 'Mô phỏng Định lượng'}
+                    </span>
+                  )}
                 </div>
                 {ev.imageDataUrl && (
                   <button
@@ -270,6 +295,14 @@ export const EvidenceTelemetryTabs = ({
                   <p className="text-xs text-slate-100 bg-slate-900 p-2.5 rounded-xl border border-slate-800 leading-relaxed">
                     {ev.textContent}
                   </p>
+                  {ev.aiMetadata?.userNoticeVi && (
+                    <p
+                      data-testid="evidence-ai-notice"
+                      className="text-[11px] text-amber-200/90 mt-1.5 px-2 py-1 rounded-lg bg-amber-950/35 border border-amber-500/25"
+                    >
+                      {ev.aiMetadata.userNoticeVi}
+                    </p>
+                  )}
                   <div className="flex flex-wrap gap-1.5 mt-2">
                     {ev.extractedSignals.map((sig, idx) => (
                       <span

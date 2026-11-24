@@ -5,10 +5,12 @@ import {
   pingDistributedRateLimiter,
 } from '@/infrastructure/distributed-rate-limiter';
 import {
+  evaluateGeminiFallbackReadiness,
   getGeminiOperationalMetrics,
   hasConfiguredGeminiKey,
   isStrictGeminiQuotaScopeRequired,
   resolveGeminiModelConfig,
+  resolveGlobalGeminiQuotaConfig,
 } from '@/infrastructure/gemini-resilience';
 import { getWorkspacePersistenceAdapter } from '@/infrastructure/persistence-adapter';
 import { getPiiHmacStatus } from '@/infrastructure/privacy-hasher';
@@ -128,6 +130,8 @@ export async function GET(req?: NextRequest): Promise<NextResponse> {
   ]);
   const aiMetrics = getGeminiOperationalMetrics();
   const modelConfig = resolveGeminiModelConfig();
+  const fallbackReadiness = evaluateGeminiFallbackReadiness();
+  const globalQuotaConfig = resolveGlobalGeminiQuotaConfig();
 
   const requireStrictSecrets = isStrictSecretsModeEnabled();
   const requireSharedPersistence =
@@ -160,6 +164,11 @@ export async function GET(req?: NextRequest): Promise<NextResponse> {
     aiMetrics.quotaScopeMode !== 'MISCONFIGURED_FAIL_CLOSED' &&
     (!requireStrictQuotaScope || aiMetrics.quotaScopeMode === 'CONFIGURED_PROJECT_SCOPE');
 
+  const globalQuotaConfigReady =
+    !globalQuotaConfig.hasMalformedConfig || (!requireDistributedRateLimit && !requireStrictQuotaScope);
+
+  const fallbackModelReady = fallbackReadiness.fallbackReady;
+
   const demoPersonaGuardReady = !isProductionStrictDemoGuardViolated();
 
   const readinessOk =
@@ -167,6 +176,8 @@ export async function GET(req?: NextRequest): Promise<NextResponse> {
     persistenceReady &&
     rateLimiterReady &&
     quotaScopeReady &&
+    globalQuotaConfigReady &&
+    fallbackModelReady &&
     demoPersonaGuardReady;
 
   const isProductionSharedInfra =
@@ -204,10 +215,13 @@ export async function GET(req?: NextRequest): Promise<NextResponse> {
       persistenceReady,
       rateLimiterReady,
       quotaScopeReady,
+      globalQuotaConfigReady,
+      fallbackModelReady,
       demoPersonaGuardReady,
     },
     primaryModel: modelConfig.primaryModel,
     fallbackModel: modelConfig.fallbackModel,
+    fallbackSource: modelConfig.fallbackSource,
     timestamp: new Date().toISOString(),
   };
 
@@ -221,6 +235,11 @@ export async function GET(req?: NextRequest): Promise<NextResponse> {
         fallbackModel: modelConfig.fallbackModel,
         primarySource: modelConfig.primarySource,
         fallbackSource: modelConfig.fallbackSource,
+        usingLegacyFallbackDefault: fallbackReadiness.usingLegacyFallbackDefault,
+        fallbackModelReady,
+        ...(fallbackReadiness.warningCode
+          ? { fallbackWarningCode: fallbackReadiness.warningCode }
+          : {}),
         isLegacyAutoRoutingModel: modelConfig.isLegacyAutoRoutingModel,
       },
       sessionSecretMode: secretStatus.mode,
@@ -232,6 +251,9 @@ export async function GET(req?: NextRequest): Promise<NextResponse> {
         quotaScopeId: aiMetrics.quotaScopeId,
         quotaScopeMode: aiMetrics.quotaScopeMode,
         quotaScopeReady,
+        globalQuotaConfigReady,
+        globalRpmMax: globalQuotaConfig.globalRpmMax,
+        globalOcrRpmMax: globalQuotaConfig.globalOcrRpmMax,
       },
       aiConcurrency: {
         concurrencyScope: aiMetrics.concurrencyScope,

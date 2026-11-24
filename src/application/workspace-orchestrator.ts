@@ -831,6 +831,7 @@ export const ingestCustomSandboxAlert = async (params: {
 }): Promise<{
   createdAlertId: string;
   extractedRecipientAccountNumber: string;
+  extractionAiMetadata?: import('@/domain/types').AiExecutionMetadata;
   report: InvestigationReport;
   forensics: ForensicSuiteOutput;
   delta: SessionDeltaSnapshot;
@@ -890,6 +891,7 @@ export const ingestCustomSandboxAlert = async (params: {
   return {
     createdAlertId: bundle.alert.id,
     extractedRecipientAccountNumber: bundle.extracted.recipientAccountNumber,
+    extractionAiMetadata: visionExtracted.aiMetadata,
     report: invResult.report,
     forensics: invResult.forensics,
     delta: invResult.delta,

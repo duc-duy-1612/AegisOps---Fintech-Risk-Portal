@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Activity,
   CheckCircle2,
@@ -76,6 +76,20 @@ export const LiveSandboxModal = ({
   const [spec, setSpec] = useState<StandardCaseInputSpec>(defaultPreset.spec);
   const [debouncedSpec, setDebouncedSpec] = useState<StandardCaseInputSpec>(defaultPreset.spec);
   const [fileError, setFileError] = useState<string | null>(null);
+  const isActiveRef = useRef<boolean>(isOpen || asPage);
+  const uploadGenerationRef = useRef<number>(0);
+
+  useEffect(() => {
+    isActiveRef.current = isOpen || asPage;
+    if (!isOpen && !asPage) {
+      uploadGenerationRef.current += 1;
+      setFileError(null);
+    }
+    return () => {
+      isActiveRef.current = false;
+      uploadGenerationRef.current += 1;
+    };
+  }, [isOpen, asPage]);
 
   useEffect(() => {
     if (initialSpec) {
@@ -146,7 +160,11 @@ export const LiveSandboxModal = ({
   const handleFileUpload = async (file: File | undefined) => {
     setFileError(null);
     if (!file) return;
+    const uploadGen = ++uploadGenerationRef.current;
     const prepared = await prepareClientReceiptImageForUpload(file);
+    if (!isActiveRef.current || uploadGen !== uploadGenerationRef.current) {
+      return;
+    }
     if (!prepared.ok) {
       setFileError(prepared.errorVi);
       return;
@@ -155,7 +173,7 @@ export const LiveSandboxModal = ({
     setSpec((prev) => ({
       ...prev,
       imageDataUrl: prepared.dataUrl,
-      customTitle: `[Vision OCR] Phân tích hồ sơ ảnh tải lên: ${file.name}`,
+      customTitle: `[Ảnh Bằng chứng] Phân tích hồ sơ ảnh tải lên: ${file.name}`,
       rawTranscript: '',
     }));
   };
@@ -178,10 +196,10 @@ export const LiveSandboxModal = ({
           </div>
           <div>
             <h2 className="text-sm font-bold text-white">
-              Biểu mẫu Tạo &amp; Kiểm thử Hồ sơ Giao dịch Thực tế (Chuẩn 4 Phần • 100% Tính toán Động)
+              Biểu mẫu Tạo &amp; Kiểm thử Kịch bản Giao dịch Mô phỏng (Chuẩn 4 Phần • 100% Tính toán Động)
             </h2>
             <p className="text-xs text-slate-400">
-              Nhập dữ liệu riêng của bạn hoặc nạp mẫu chuẩn rồi tùy chỉnh từng thông số để kiểm chứng 5 công cụ định lượng &amp; Trợ lý Gemini
+              Tạo kịch bản tổng hợp hoặc nạp mẫu chuẩn rồi tùy chỉnh thông số để kiểm chứng 5 công cụ định lượng &amp; Trợ lý Gemini (chỉ dùng dữ liệu mô phỏng, không nhập dữ liệu thật)
             </p>
           </div>
         </div>
@@ -664,16 +682,24 @@ export const LiveSandboxModal = ({
                 />
               </div>
 
+              <div
+                data-testid="sandbox-synthetic-warning"
+                className="p-2.5 rounded-lg bg-amber-950/45 border border-amber-500/35 text-[11px] text-amber-200 leading-relaxed"
+              >
+                <strong className="text-amber-300">Lưu ý dữ liệu mô phỏng:</strong> Chỉ nhập kịch bản giả lập hoặc tải ảnh mẫu mô phỏng.{' '}
+                <strong>KHÔNG</strong> tải CCCD, số tài khoản, đoạn chat hoặc ảnh chụp giao dịch thật. Hệ thống không thể tự phân biệt kỹ thuật giữa ảnh thật và ảnh mô phỏng.
+              </div>
+
               <div>
                 <label htmlFor="sandbox-transcript" className="block text-slate-300 font-semibold mb-1">
-                  Nội dung tin nhắn / kịch bản / hóa đơn (Hoặc để trống khi tải ảnh để Gemini Vision tự đọc OCR)
+                  Nội dung tin nhắn / kịch bản / hóa đơn mô phỏng (Hoặc để trống khi tải ảnh mẫu để Gemini Vision đọc OCR)
                 </label>
                 <textarea
                   id="sandbox-transcript"
                   rows={2}
                   value={spec.rawTranscript}
                   onChange={(e) => updateField('rawTranscript', e.target.value)}
-                  placeholder="Dán đoạn chat Zalo/SMS hoặc mô tả giao dịch..."
+                  placeholder="Dán đoạn chat giả lập hoặc mô tả kịch bản giao dịch mô phỏng..."
                   className="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-slate-100 leading-relaxed"
                 />
               </div>
@@ -699,7 +725,7 @@ export const LiveSandboxModal = ({
                   className="cursor-pointer inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-violet-600/25 hover:bg-violet-600/40 text-violet-200 border border-violet-500/40 font-bold"
                 >
                   <FileUp className="w-3.5 h-3.5" />
-                  <span>Tải ảnh riêng từ máy...</span>
+                  <span>Tải ảnh mẫu mô phỏng...</span>
                 </label>
                 <input
                   id="sandbox-image-upload"
