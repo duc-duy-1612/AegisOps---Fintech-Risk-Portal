@@ -1,0 +1,4 @@
+[build.environment]
+  # .env.example is a committed template that only contains placeholders.
+  # Exclude it from secrets scanning so placeholder text cannot trigger false positives.
+  SECRETS_SCAN_OMIT_PATHS = ".env.example"
