@@ -7,6 +7,7 @@
  * It enforces strict rate limits per serverless/Node instance, NOT distributed global rate limiting
  * across multiple parallel serverless containers (which would require a shared store such as Redis/Postgres).
  */
+import { isIP } from 'node:net';
 import type { NextRequest } from 'next/server';
 import {
   MAX_IMAGE_BINARY_BYTES,
@@ -40,30 +41,78 @@ export const resetRateBucketsForTest = (): void => {
   rateBuckets.clear();
 };
 
+const normalizeValidIp = (raw: string | null | undefined): string | null => {
+  if (typeof raw !== 'string') return null;
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  const version = isIP(trimmed);
+  if (version === 4) return trimmed;
+  if (version === 6) return trimmed.toLowerCase();
+  return null;
+};
+
+const getNormalizedTrustProxyHeadersSetting = (): string =>
+  (process.env.TRUST_PROXY_HEADERS ?? '').trim().toLowerCase();
+
+const resolveDirectPeerFallback = (req: NextRequest): string => {
+  const nextReqIp = normalizeValidIp((req as NextRequest & { ip?: string }).ip);
+  if (nextReqIp) return nextReqIp;
+  return 'direct-unproxied-client';
+};
+
+/**
+ * Detects Netlify Functions runtime exclusively via the three documented
+ * read-only runtime environment variables (`SITE_ID`, `SITE_NAME`, `URL`).
+ * Does NOT rely on build-time-only `NETLIFY=true`.
+ */
+export const isNetlifyRuntime = (): boolean => {
+  return Boolean(
+    process.env.SITE_ID?.trim() &&
+      process.env.SITE_NAME?.trim() &&
+      process.env.URL?.trim()
+  );
+};
+
 export const resolveTrustedClientIp = (req: NextRequest): string => {
+  const trustProxySetting = getNormalizedTrustProxyHeadersSetting();
+
+  // Explicit fail-closed override: disable trust in ALL proxy-supplied client IP headers
+  if (trustProxySetting === 'false') {
+    return resolveDirectPeerFallback(req);
+  }
+
   // Only trust Vercel edge forwarding header when actually running on Vercel platform
   if (process.env.VERCEL === '1') {
     const vercelForwarded = req.headers.get('x-vercel-forwarded-for');
     if (vercelForwarded) {
-      const first = vercelForwarded.split(',')[0]?.trim();
-      if (first && /^[0-9a-fA-F:.]{3,45}$/.test(first)) {
+      const first = normalizeValidIp(vercelForwarded.split(',')[0]);
+      if (first) {
         return first;
       }
     }
   }
 
-  // Only trust x-real-ip when behind explicitly trusted reverse proxy
-  if (process.env.VERCEL === '1' || process.env.TRUST_PROXY_HEADERS === 'true') {
-    const realIp = req.headers.get('x-real-ip')?.trim();
-    if (realIp && /^[0-9a-fA-F:.]{3,45}$/.test(realIp)) {
+  // On Netlify Functions runtime, trust ONLY the edge-authoritative `x-nf-client-connection-ip` header.
+  // Never fall back to `x-real-ip` or `x-forwarded-for` on Netlify (even when TRUST_PROXY_HEADERS=true)
+  // because Netlify Edge preserves client-supplied `x-real-ip` values while setting `x-nf-client-connection-ip`.
+  if (isNetlifyRuntime()) {
+    const netlifyClientIp = normalizeValidIp(req.headers.get('x-nf-client-connection-ip'));
+    if (netlifyClientIp) {
+      return netlifyClientIp;
+    }
+    return resolveDirectPeerFallback(req);
+  }
+
+  // Only trust x-real-ip when behind explicitly trusted non-Netlify reverse proxy
+  if (process.env.VERCEL === '1' || trustProxySetting === 'true') {
+    const realIp = normalizeValidIp(req.headers.get('x-real-ip'));
+    if (realIp) {
       return realIp;
     }
   }
 
-  // Direct Node/local runtime: IGNORE spoofable x-forwarded-for, x-real-ip, and x-workspace-session
-  const nextReqIp = (req as NextRequest & { ip?: string }).ip?.trim();
-  if (nextReqIp) return nextReqIp;
-  return 'direct-unproxied-client';
+  // Direct Node/local runtime: IGNORE spoofable x-forwarded-for, x-real-ip, x-nf-client-connection-ip, and x-workspace-session
+  return resolveDirectPeerFallback(req);
 };
 
 export const checkRateLimit = (
