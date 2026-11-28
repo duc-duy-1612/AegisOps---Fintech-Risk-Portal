@@ -40,6 +40,7 @@ import {
   type ComplianceIncidentDossier,
 } from '@/domain/compliance-report';
 import { ComplianceReportModal } from './ComplianceReportModal';
+import { StructuredSummaryPoints } from './StructuredSummaryPoints';
 import type { ChatMessageItem } from '@/presentation/hooks/useAegisWorkspace';
 
 interface AiCopilotInvestigationPanelProps {
@@ -338,9 +339,7 @@ export const AiCopilotInvestigationPanel = ({
           )}
         </div>
 
-        <p className="text-xs text-slate-100 leading-relaxed">
-          {activeBrief.executiveSummaryVi}
-        </p>
+        <StructuredSummaryPoints text={activeBrief.executiveSummaryVi} compact />
 
         {/* Shadow Mode Benchmark Strip: Legacy Rule vs AegisOps Hybrid AI */}
         <div className="p-2.5 rounded-xl bg-slate-900/90 border border-slate-800 text-[11px] space-y-1">

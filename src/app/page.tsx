@@ -367,6 +367,9 @@ export default function AegisOpsHomePage() {
               selfRescuedAmountVnd={workspaceState.delta.selfRescuedAmountVnd ?? 0}
               isImportingBatch={isImportingBatch}
               isLiveFeedEnabled={isLiveFeedEnabled}
+              selectedTagFilter={selectedTagFilter}
+              tagOptions={tagOptions}
+              onSelectTagFilter={(tag) => setSelectedTagFilter(tag)}
               onOpenAlertInvestigation={handleOpenAlertInvestigation}
               onEditAlertSpec={handleEditAlertSpec}
               onNavigateView={(view) => setActiveView(view)}

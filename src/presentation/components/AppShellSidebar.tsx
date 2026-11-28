@@ -98,7 +98,7 @@ export const AppShellSidebar = ({
         } else {
           setAiHealthState({
             status: 'deterministic_fallback',
-            modelLabel: 'Deterministic Fallback',
+            modelLabel: 'Chế độ Định lượng',
           });
         }
       })
@@ -119,7 +119,6 @@ export const AppShellSidebar = ({
   const navItems: {
     id: WorkspaceViewId;
     labelVi: string;
-    subtitleVi: string;
     badge?: string | number;
     badgeColor?: string;
     icon: React.ReactNode;
@@ -127,60 +126,52 @@ export const AppShellSidebar = ({
     {
       id: 'DASHBOARD',
       labelVi: 'Dashboard Tổng quan',
-      subtitleVi: 'KPI, Biểu đồ & Tag Box',
       badge: `${alertCount}`,
-      badgeColor: 'bg-slate-800 text-slate-200',
+      badgeColor: 'bg-slate-800/90 text-slate-300',
       icon: <LayoutDashboard className="w-4 h-4 text-amber-400 shrink-0" />,
     },
     {
       id: 'INVESTIGATION',
       labelVi: 'Trung tâm Điều tra',
-      subtitleVi: 'Đồ thị, Bằng chứng & AI',
       badge: pendingCount > 0 ? `${pendingCount} chờ` : 'Xong',
       badgeColor:
         pendingCount > 0
-          ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
-          : 'bg-emerald-500/20 text-emerald-300',
+          ? 'bg-amber-500/15 text-amber-300 border border-amber-500/25'
+          : 'bg-emerald-500/15 text-emerald-300',
       icon: <SearchCode className="w-4 h-4 text-cyan-400 shrink-0" />,
     },
     {
       id: 'CASE_BUILDER',
       labelVi: 'Nhập Hồ sơ Kiểm thử',
-      subtitleVi: 'Form 4 Phần & Vision OCR',
-      badge: 'Mới',
-      badgeColor: 'bg-violet-500/20 text-violet-300 border border-violet-500/30',
       icon: <FilePlus2 className="w-4 h-4 text-violet-400 shrink-0" />,
     },
     {
       id: 'WALLET_SHIELD',
       labelVi: 'Ví & Lá chắn Người dùng',
-      subtitleVi: 'Đèn 3 Màu, VietQR & Chặn',
       badge: activeShieldCount,
       badgeColor:
         activeShieldCount > 0
-          ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
-          : 'bg-slate-800 text-slate-300',
+          ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/25'
+          : 'bg-slate-800/90 text-slate-400',
       icon: <Smartphone className="w-4 h-4 text-emerald-400 shrink-0" />,
     },
     {
       id: 'COMPLIANCE_AUDIT',
       labelVi: 'Pháp lý & Nhật ký Audit',
-      subtitleVi: 'QĐ 2345, TT 50 & SIMO',
       badge: auditCount,
-      badgeColor: 'bg-slate-800 text-slate-300',
+      badgeColor: 'bg-slate-800/90 text-slate-400',
       icon: <FileCheck2 className="w-4 h-4 text-rose-400 shrink-0" />,
     },
   ];
 
   return (
     <aside
-      className={`bg-slate-950 border-r border-slate-800/90 flex flex-col justify-between shrink-0 transition-all duration-200 ${
+      className={`sticky top-0 h-screen bg-slate-950 border-r border-slate-800/90 flex flex-col justify-between shrink-0 transition-all duration-200 overflow-y-auto ${
         collapsed ? 'w-[72px]' : 'w-64'
       }`}
     >
-      {/* Top Brand + Primary Vertical Menu */}
+      {/* Top Brand + Primary Vertical Menu + Full Vertical Controls */}
       <div className="p-3 space-y-4">
-        {/* Brand Row */}
         <div className="flex items-center justify-between gap-2 pb-3 border-b border-slate-800/80">
           <div className="flex items-center gap-2.5 min-w-0">
             <div className="h-9 w-9 rounded-xl bg-amber-500/15 border border-amber-500/40 flex items-center justify-center text-amber-400 shrink-0">
@@ -210,51 +201,41 @@ export const AppShellSidebar = ({
           </button>
         </div>
 
-        {/* Navigation Section */}
-        <div className="space-y-1">
-          {!collapsed && (
-            <div className="px-2 pb-1 text-[11px] font-bold text-slate-400">
-              Menu Phân hệ Chính
-            </div>
-          )}
-          <nav aria-label="Menu dọc AegisOps" className="space-y-1">
-            {navItems.map((item) => {
-              const isActive = activeView === item.id;
-              return (
-                <button
-                  key={item.id}
-                  type="button"
-                  onClick={() => onSelectView(item.id)}
-                  title={collapsed ? item.labelVi : undefined}
-                  className={`cursor-pointer w-full flex items-center justify-between gap-2 px-2.5 py-2.5 rounded-xl border text-left transition-all ${
-                    isActive
-                      ? 'bg-slate-800/95 border-amber-400/70 text-white shadow-sm'
-                      : 'bg-transparent border-transparent hover:bg-slate-900 text-slate-300 hover:text-white'
-                  }`}
-                >
-                  <div className="flex items-center gap-2.5 min-w-0">
-                    {item.icon}
-                    {!collapsed && (
-                      <div className="min-w-0">
-                        <div className="text-xs font-bold truncate">{item.labelVi}</div>
-                        <div className="text-[11px] text-slate-400 truncate">{item.subtitleVi}</div>
-                      </div>
-                    )}
-                  </div>
-                  {!collapsed && item.badge !== undefined && (
-                    <span
-                      className={`text-[10px] font-bold px-1.5 py-0.5 rounded-md shrink-0 ${item.badgeColor}`}
-                    >
-                      {item.badge}
-                    </span>
+        {/* 5 Clean Core Modules */}
+        <nav aria-label="Menu dọc AegisOps" className="space-y-1">
+          {navItems.map((item) => {
+            const isActive = activeView === item.id;
+            return (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => onSelectView(item.id)}
+                title={collapsed ? item.labelVi : undefined}
+                className={`cursor-pointer w-full flex items-center justify-between gap-2 px-2.5 py-2 rounded-xl border text-left transition-all ${
+                  isActive
+                    ? 'bg-slate-900 border-amber-400/60 text-white shadow-sm'
+                    : 'bg-transparent border-transparent hover:bg-slate-900/70 text-slate-300 hover:text-white'
+                }`}
+              >
+                <span className="flex items-center gap-2.5 min-w-0">
+                  {item.icon}
+                  {!collapsed && (
+                    <span className="text-xs font-bold truncate">{item.labelVi}</span>
                   )}
-                </button>
-              );
-            })}
-          </nav>
-        </div>
+                </span>
+                {!collapsed && item.badge !== undefined && (
+                  <span
+                    className={`text-[10px] font-bold px-1.5 py-0.5 rounded-md shrink-0 ${item.badgeColor}`}
+                  >
+                    {item.badge}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </nav>
 
-        {/* Vertical Quick Toggles & Feature Options */}
+        {/* Full Preserved Vertical Quick Toggles, Role Switcher, Auto Demo & Reset */}
         <div className="pt-3 border-t border-slate-800/80 space-y-1.5">
           {!collapsed && (
             <div className="px-2 pb-1 text-[11px] font-bold text-slate-400 flex items-center gap-1.5">
@@ -279,7 +260,7 @@ export const AppShellSidebar = ({
             </span>
             {!collapsed && (
               <span
-                className={`w-7 h-4 rounded-full p-0.5 transition-colors flex items-center ${
+                className={`w-7 h-4 rounded-full p-0.5 transition-colors flex items-center shrink-0 ${
                   isSplitScreen ? 'bg-cyan-500 justify-end' : 'bg-slate-700 justify-start'
                 }`}
               >
@@ -304,7 +285,7 @@ export const AppShellSidebar = ({
             </span>
             {!collapsed && (
               <span
-                className={`w-7 h-4 rounded-full p-0.5 transition-colors flex items-center ${
+                className={`w-7 h-4 rounded-full p-0.5 transition-colors flex items-center shrink-0 ${
                   showPendingOnly ? 'bg-amber-500 justify-end' : 'bg-slate-700 justify-start'
                 }`}
               >
@@ -333,7 +314,7 @@ export const AppShellSidebar = ({
             </span>
             {!collapsed && (
               <span
-                className={`w-7 h-4 rounded-full p-0.5 transition-colors flex items-center ${
+                className={`w-7 h-4 rounded-full p-0.5 transition-colors flex items-center shrink-0 ${
                   isLiveFeedEnabled ? 'bg-emerald-500 justify-end' : 'bg-slate-700 justify-start'
                 }`}
               >
@@ -349,7 +330,7 @@ export const AppShellSidebar = ({
                 htmlFor="sidebar-role-select"
                 className="px-1 text-[11px] font-bold text-slate-400 flex items-center gap-1.5"
               >
-                <UserCog className="w-3.5 h-3.5 text-violet-400" />
+                <UserCog className="w-3.5 h-3.5 text-violet-400 shrink-0" />
                 <span>Chế độ Giả lập Vai trò Demo (Maker-Checker):</span>
               </label>
               <select
@@ -362,10 +343,12 @@ export const AppShellSidebar = ({
                 <option value="L1_MAKER">Chuyên viên L1 (Maker)</option>
                 <option value="END_USER">Khách hàng Ví (End-User)</option>
               </select>
-              <p className="px-1 text-[10px] text-slate-400 leading-snug">
+              <p className="px-1 text-[10px] text-slate-400 leading-snug break-words">
                 Mô phỏng 1-Click cho Demo cuộc thi (khóa bằng{' '}
-                <code className="text-slate-300">AEGIS_ENABLE_DEMO_PERSONA_SWITCH=false</code> ở
-                Production; không thay thế SSO doanh nghiệp).
+                <code className="text-slate-300 break-all">
+                  AEGIS_ENABLE_DEMO_PERSONA_SWITCH=false
+                </code>{' '}
+                ở Production; không thay thế SSO doanh nghiệp).
               </p>
             </div>
           )}
@@ -375,7 +358,7 @@ export const AppShellSidebar = ({
             disabled={isAutoDemoRunning}
             onClick={onRunAutoDemo}
             title="Trình diễn Tự động Khép kín 15 giây"
-            className="cursor-pointer w-full flex items-center gap-2 px-2.5 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold transition-colors"
+            className="cursor-pointer w-full flex items-center gap-2 px-2.5 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 disabled:opacity-60 text-slate-950 text-xs font-bold transition-colors"
           >
             <Play className="w-3.5 h-3.5 fill-current shrink-0" />
             {!collapsed && <span className="truncate">Trình diễn Tự động (15s)</span>}

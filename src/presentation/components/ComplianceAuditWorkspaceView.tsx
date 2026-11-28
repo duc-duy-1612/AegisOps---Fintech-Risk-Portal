@@ -18,6 +18,10 @@ import type {
   Transaction,
 } from '@/domain/types';
 import { ComplianceReportModal } from './ComplianceReportModal';
+import {
+  StructuredRegulatoryCards,
+  StructuredSummaryPoints,
+} from './StructuredSummaryPoints';
 
 interface ComplianceAuditWorkspaceViewProps {
   alerts: FraudAlert[];
@@ -83,20 +87,20 @@ export const ComplianceAuditWorkspaceView = ({
   return (
     <div className="grid grid-cols-1 xl:grid-cols-12 gap-4 items-start">
       {/* Left: SBV Compliance Dossier & 1-Click Push to SIMO Registry */}
-      <section className="xl:col-span-7 bg-slate-900/90 border border-slate-800 rounded-2xl p-4 space-y-3 shadow-lg">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div className="flex items-center gap-2">
-            <FileCheck2 className="w-4 h-4 text-emerald-400" />
+      <section className="xl:col-span-7 min-w-0 bg-slate-900/90 border border-slate-800 rounded-2xl p-4 space-y-3 shadow-lg">
+        <div className="flex flex-wrap items-center justify-between gap-2 min-w-0">
+          <div className="flex items-center gap-2 min-w-0">
+            <FileCheck2 className="w-4 h-4 text-emerald-400 shrink-0" />
             <h2 className="text-sm font-bold text-white">
               Hồ sơ Pháp lý NHNN &amp; Cổng Đồng bộ SIMO Ẩn danh PII
             </h2>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto max-w-full min-w-0">
             <select
               value={selectedDossierAlertId}
               onChange={(e) => setSelectedDossierAlertId(e.target.value)}
-              className="bg-slate-950 border border-slate-700 rounded-xl px-3 py-1.5 text-xs font-bold text-white"
+              className="w-full sm:w-auto max-w-full min-w-0 truncate bg-slate-950 border border-slate-700 rounded-xl px-3 py-1.5 text-xs font-bold text-white"
             >
               {alerts.map((a) => (
                 <option key={a.id} value={a.id}>
@@ -157,28 +161,23 @@ export const ComplianceAuditWorkspaceView = ({
 
         {previewDossier && (
           <div className="space-y-3 text-xs">
-            <div className="bg-slate-950 border border-slate-800 rounded-xl p-3.5 space-y-1.5">
-              <div className="font-bold text-amber-300">
-                Kết luận Hồ sơ ({previewDossier.dossierId}) • Điểm định lượng:{' '}
-                {previewDossier.deterministicRiskScore}/100
+            <div className="bg-slate-950 border border-slate-800 rounded-xl p-3.5 space-y-2.5">
+              <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-slate-800/80">
+                <div className="font-bold text-amber-300">
+                  Kết luận Hồ sơ ({previewDossier.dossierId})
+                </div>
+                <span className="px-2 py-0.5 rounded-md bg-red-500/15 border border-red-500/30 text-red-300 font-bold text-[11px]">
+                  Điểm định lượng: {previewDossier.deterministicRiskScore}/100
+                </span>
               </div>
-              <p className="text-slate-200 leading-relaxed">
-                {previewDossier.executiveSummaryVi}
-              </p>
+              <StructuredSummaryPoints text={previewDossier.executiveSummaryVi} />
             </div>
 
-            <div className="bg-slate-950 border border-violet-500/30 rounded-xl p-3.5 space-y-2">
+            <div className="bg-slate-950 border border-violet-500/30 rounded-xl p-3.5 space-y-2.5">
               <div className="font-bold text-violet-300">
                 Đối chiếu Pháp lý (QĐ 2345/QĐ-NHNN • TT 50/2024 sửa đổi bởi TT 77/2025 • Luật 91/2025/QH15 &amp; NĐ 356/2025/NĐ-CP)
               </div>
-              <ul className="space-y-1 text-slate-200">
-                {previewDossier.regulatoryReferencesVi.map((r, i) => (
-                  <li key={i} className="flex items-start gap-2">
-                    <span className="text-amber-400 font-bold">•</span>
-                    <span>{r}</span>
-                  </li>
-                ))}
-              </ul>
+              <StructuredRegulatoryCards references={previewDossier.regulatoryReferencesVi} />
             </div>
 
             <div className="bg-slate-950 border border-slate-800 rounded-xl p-3.5 space-y-1.5">
@@ -215,7 +214,7 @@ export const ComplianceAuditWorkspaceView = ({
       </section>
 
       {/* Right: Filterable System Audit Trail with Actor Tags */}
-      <section className="xl:col-span-5 bg-slate-900/90 border border-slate-800 rounded-2xl p-4 space-y-3 shadow-lg">
+      <section className="xl:col-span-5 min-w-0 bg-slate-900/90 border border-slate-800 rounded-2xl p-4 space-y-3 shadow-lg">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-2">
             <History className="w-4 h-4 text-cyan-400" />
